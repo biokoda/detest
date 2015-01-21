@@ -1,5 +1,6 @@
 -module(detest).
 -export([main/1]).
+-define(PATH,".detest").
 
 main([]) ->
 	io:format("Missing run script parameter.~n");
@@ -19,7 +20,7 @@ main([ScriptNm]) ->
 	GlobCfgs = proplists:get_value(global_cfg,Cfg),
 	NodeCfgs = proplists:get_value(per_node_cfg,Cfg),
 	Nodes = proplists:get_value(nodes,Cfg),
-	Path = ".detest",
+	Path = ?PATH,
 	% Path = proplists:get_value(path,Cfg,"test/run"),
 	% script path without name of script
 	% LowestPath = filename:join(lists:reverse(tl(lists:reverse(filename:split(filename:absname(escript:script_name())))))),
@@ -33,8 +34,6 @@ main([ScriptNm]) ->
 	os:cmd("rm -rf "++Path),
 	
 	compile_cfgs(GlobCfgs++NodeCfgs),
-
-	setup_dist(NodeCfgs),
 
 	% create files in etc
 	[begin
@@ -53,8 +52,10 @@ main([ScriptNm]) ->
 			Nm = [Path,"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(NC))],
 			filelib:ensure_dir(Nm),
 			ok = file:write_file(Nm,FBin)
-		end || NC <- NodeCfgs] 
+		end || NC <- NodeCfgs]
 	end || Nd <- Nodes],
+
+	setup_dist(),
 
 	% spawn nodes
 	[begin
@@ -119,8 +120,14 @@ render_cfg(Cfg,P) ->
 			Param = []
 	end,
 	io:format("Render ~p~n",[P++Param]),
-	case apply(modnm(FN),render,[P++Param]) of
+	case apply(modnm(FN),render,[[{basepath,?PATH}|P]++Param]) of
 		{ok,Bin} ->
+			case string:str(FN,"vm.args") of
+				0 ->
+					ok;
+				_ ->
+					setup_dist(iolist_to_binary(Bin))
+			end,
 			Bin;
 		Err ->
 			io:format("Error rendering ~p~nParam:~p~nError:~p~n",[FN,P,Err]),
@@ -160,18 +167,18 @@ compile_cfgs(L) ->
 		end
 	end || Cfg <- L].
 
-
-setup_dist([H|T]) ->
-	case string:str(H,"vm.args") of
-		0 ->
-			setup_dist(T);
-		_ ->
-			{ok,VmBin} = file:read_file(H),
+setup_dist() ->
+	setup_dist(<<>>).
+setup_dist(VmBin) ->
+	case whereis(net_kernel) of
+		undefined when VmBin /= <<>> ->
 		  	Lines = string:tokens(binary_to_list(VmBin),"\r\n"),
-			parse_args(Lines,[])
-	end;
-setup_dist([]) ->
-	{ok, _} = net_kernel:start([setname("a@127.0.0.1"), longnames]).
+			parse_args(Lines,[]);
+		undefined ->
+			{ok, _} = net_kernel:start([setname("a@127.0.0.1"), longnames]);
+		_ ->
+			ok
+	end.
 
 parse_args([" "++Rem|T],L) ->
 	parse_args([Rem|T],L);
@@ -180,22 +187,23 @@ parse_args(["#"++_|T],L) ->
 parse_args(["-name " ++ Namestr|T],L) ->
 	Curname = rem_spaces(Namestr),
 	Myname = setname(Curname),
-  case node() == 'nonode@nohost' of
-    true ->
-      {ok, _} = net_kernel:start([Myname, longnames]);
-    _ ->
-      ok
-  end,
+	io:format("Name ~p ~p~n",[Myname,Namestr]),
+	case node() == 'nonode@nohost' of
+	    true ->
+	    	{ok, _} = net_kernel:start([Myname, longnames]);
+	    _ ->
+			ok
+	end,
 	parse_args(T,[{node,list_to_atom(Curname)},{myname,Myname}|L]);
 parse_args(["-sname " ++ Namestr|T],L) ->
 	Curname = rem_spaces(Namestr),
-  Myname = setname(Curname),
-  case node() == 'nonode@nohost' of
-    true ->
-      {ok, _} = net_kernel:start([Myname, shortnames]);
-    _ ->
-      ok
-  end,
+	Myname = setname(Curname),
+	case node() == 'nonode@nohost' of
+		true ->
+	    	{ok, _} = net_kernel:start([Myname, shortnames]);
+	    _ ->
+	      	ok
+	end,
 	parse_args(T,[{node,list_to_atom(Curname)},{myname,Myname}|L]);
 parse_args(["-setcookie "++N|T],L) ->
 	erlang:set_cookie(node(), list_to_atom(rem_spaces(N))),
