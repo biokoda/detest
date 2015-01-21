@@ -1,0 +1,13 @@
+{application, detest,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  compiler
+                 ]},
+  {mod, { detest, []}},
+  {env, []}
+ ]}.
