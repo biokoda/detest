@@ -1,6 +1,17 @@
 -module(detest).
--export([main/1]).
+-export([main/1,ez/0]).
 -define(PATH,".detest").
+
+ez() ->
+	Ebin = filelib:wildcard("ebin/*"),
+	Deps = filelib:wildcard("deps/*/ebin/*"),
+	Files = 
+	[begin
+		{ok,Bin} = file:read_file(Fn),
+		{filename:basename(Fn),Bin}
+	end || Fn <- Ebin++Deps],
+	{ok,{_,Bin}} = zip:create("detest.ez",Files,[memory]),
+	file:write_file("detest.ez",Bin).
 
 main([]) ->
 	io:format("Missing run script parameter.~n");
@@ -59,37 +70,64 @@ main([ScriptNm]) ->
 
 	% spawn nodes
 	[begin
-		Cmd = proplists:get_value(cmd,Nd,""),
+		RunCmd = proplists:get_value(cmd,Nd,""),
 		AppPth = lists:flatten([Path,"/",ndnm(Nd),"/etc/app.config"]),
 		case filelib:is_regular(AppPth) of
 			true ->
-				AppCmd = " -config "++AppPth;
+				AppCmd = " -config "++filename:absname(AppPth);
 			false ->
 				AppCmd = ""
 		end,
 		VmArgs = lists:flatten([Path,"/",ndnm(Nd),"/etc/vm.args"]),
 		case filelib:is_regular(VmArgs) of
 			true ->
-				VmCmd = " -args_file "++VmArgs;
+				VmCmd = " -args_file "++filename:absname(VmArgs);
 			false ->
 				VmCmd = ""
 		end,
-		% spawn(fun() -> os:cmd("erl -pa ebin deps/*/ebin "++AppCmd++VmCmd++" "++Cmd) end)
-		io:format("erl -pa ebin deps/*/ebin "++AppCmd++VmCmd++" "++Cmd++"~n")
+
+		Ebins = string:join([filename:absname(Nm) || Nm <- ["ebin"|filelib:wildcard("deps/*/ebin")]]," "),
+		Cmd = "erl -noshell -noinput -pa "++Ebins++" "++AppCmd++VmCmd, %++" "++RunCmd,
+		io:format("Running ~p ~p~n",[Cmd,erlang:get_cookie()]),
+		spawn(fun() -> X = os:cmd(Cmd),	io:format("Node finished. ~p~n",[X]) end)
 	end || Nd <- Nodes],
-	halt(1),
+
+	timer:sleep(1000),
+
+	% FirstNd = ndnm(hd(Nodes)),
+	% case file:read_file([Path,"/",FirstNd,"/etc/vm.args"]) of
+	% 	{ok,FirstVm} ->
+	% 		setup_dist(FirstVm);
+	% 	_ ->
+	% 		setup_dist()
+	% end,
+
+
+	apply(Mod,setup,[?PATH]),
 
 	connect(Nodes,0),
 
-	case catch apply(Mod,run,[]) of
+	case catch apply(Mod,run,[?PATH]) of
 		{'EXIT',Err1} ->
 			io:format("Test crashed ~p~n",[Err1]);
 		_ ->
 			ok
 	end,
-	[spawn(fun() -> rpc:call(proplists:get_value(distname,Nd),init,stop,[]) end) || Nd <- Nodes],
-	timer:sleep(200).
+	Pids = [spawn(fun() -> rpc:call(proplists:get_value(distname,Nd),init,stop,[]) end) || Nd <- Nodes],
+	wait_pids(Pids),
+	
+	apply(Mod,cleanup,[?PATH]).
 
+wait_pids([H|T]) ->
+	case erlang:is_process_alive(H) of
+		true ->
+			timer:sleep(5000),
+			wait_pids([H|T]);
+		false ->
+			wait_pids(T)
+	end;
+wait_pids([]) ->
+	ok.
 
 connect([H|T],N) when N < 100 ->
 	Node = proplists:get_value(distname,H,""),
@@ -106,7 +144,7 @@ connect([H|T],N) when N < 100 ->
 			timer:sleep(100),
 			connect([H|T],N+1)
 	end;
-connect([H|_],N) ->
+connect([H|_],_N) ->
 	io:format("Timeout connect to ~p~n",[H]),
 	halt(1);
 connect([],_) ->
@@ -119,7 +157,7 @@ render_cfg(Cfg,P) ->
 		FN ->
 			Param = []
 	end,
-	io:format("Render ~p~n",[P++Param]),
+	% io:format("Render ~p~n",[P++Param]),
 	case apply(modnm(FN),render,[[{basepath,?PATH}|P]++Param]) of
 		{ok,Bin} ->
 			case string:str(FN,"vm.args") of
@@ -227,7 +265,7 @@ rem_spaces(Str) ->
 	lists:filter(fun(X) -> X /= $\s end,Str).
 
 epmd_path() ->
-  ErtsBinDir = filename:dirname(escript:script_name()),
+  ErtsBinDir = filename:dirname(element(2,file:get_cwd())),
   Name = "epmd",
   case os:find_executable(Name, ErtsBinDir) of
     false ->
