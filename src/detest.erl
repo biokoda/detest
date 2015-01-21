@@ -3,13 +3,13 @@
 
 main([]) ->
 	io:format("Missing run script parameter.~n");
-main([Nm]) ->
+main([ScriptNm]) ->
 	% [code:add_path(Dep) || Dep <- filelib:wildcard("deps/*/ebin")],
 	% code:add_path("ebin"),
 	[] = os:cmd(epmd_path() ++ " -daemon"),
-	case compile:file(Nm,[binary,return_errors]) of
+	case compile:file(ScriptNm,[binary,return_errors]) of
 		{ok,Mod,Bin} ->
-			code:load_binary(Mod, filename:basename(Nm), Bin);
+			code:load_binary(Mod, filename:basename(ScriptNm), Bin);
 		Err ->
 			Mod = undefined,
 			io:format("Unable to compile: ~p~n",[Err]),
@@ -41,14 +41,18 @@ main([Nm]) ->
 		filelib:ensure_dir([Path,"/",ndnm(Nd),"/etc"]),
 		[begin
 			FBin = render_cfg(G,[{nodes,Nodes}]),
-			ok = file:write_file([Path,"/",ndnm(Nd),"/etc/",filename:basename(G)],FBin)
+			Nm = [Path,"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(G))],
+			filelib:ensure_dir(Nm),
+			ok = file:write_file(Nm,FBin)
 		end || G <- GlobCfgs]
 	 end || Nd <- Nodes],
 
 	[begin
 		[begin
-			FBin = render_cfg(NC,ndnm(Nd)),
-			ok = file:write_file([Path,"/",ndnm(Nd),"/etc/",filename:basename(NC)],FBin)
+			FBin = render_cfg(NC,Nd),
+			Nm = [Path,"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(NC))],
+			filelib:ensure_dir(Nm),
+			ok = file:write_file(Nm,FBin)
 		end || NC <- NodeCfgs] 
 	end || Nd <- Nodes],
 
@@ -69,8 +73,10 @@ main([Nm]) ->
 			false ->
 				VmCmd = ""
 		end,
-		spawn(fun() -> os:cmd("erl -pa ebin deps/*/ebin "++AppCmd++VmCmd++" "++Cmd) end)
+		% spawn(fun() -> os:cmd("erl -pa ebin deps/*/ebin "++AppCmd++VmCmd++" "++Cmd) end)
+		io:format("erl -pa ebin deps/*/ebin "++AppCmd++VmCmd++" "++Cmd++"~n")
 	end || Nd <- Nodes],
+	halt(1),
 
 	connect(Nodes,0),
 
@@ -105,8 +111,15 @@ connect([H|_],N) ->
 connect([],_) ->
 	ok.
 
-render_cfg(FN,P) ->
-	case apply(modnm(FN),render,[P]) of
+render_cfg(Cfg,P) ->
+	case Cfg of
+		{FN,Param} ->
+			ok;
+		FN ->
+			Param = []
+	end,
+	io:format("Render ~p~n",[P++Param]),
+	case apply(modnm(FN),render,[P++Param]) of
 		{ok,Bin} ->
 			Bin;
 		Err ->
@@ -124,16 +137,27 @@ ndnm(N) ->
 	[NS1|_] = string:tokens(NS,"@"),
 	NS1.
 
+dtlnm(G) ->
+	case G of
+		{GNm,_} ->
+			GNm;
+		GNm ->
+			GNm
+	end.
 
 compile_cfgs(L) ->
-	[case erlydtl:compile(Cfg, list_to_atom(filename:basename(Cfg)),[{out_dir,false}]) of
-		ok ->
-			ok;
-		{ok,_} ->
-			ok;
-		Err ->
-			io:format("Error compiling ~p~n~p~n",[Cfg,Err]),
-			halt(1)
+	[begin
+		case erlydtl:compile_file(dtlnm(Cfg), list_to_atom(filename:basename(dtlnm(Cfg))),[{out_dir,false},return]) of
+			ok ->
+				ok;
+			{ok,_} ->
+				ok;
+			{ok,_,_} ->
+				ok;
+			Err ->
+				io:format("Error compiling ~p~n~p~n",[dtlnm(Cfg),Err]),
+				halt(1)
+		end
 	end || Cfg <- L].
 
 
