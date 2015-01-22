@@ -1,8 +1,10 @@
 -module(detest).
 -export([main/1,ez/0]).
+-export([]).
 -define(PATH,".detest").
 -define(INF(F,Param),io:format("~p ~p:~p ~s~n",[time(),?MODULE,?LINE,io_lib:fwrite(F,Param)])).
 -define(INF(F),?INF(F,[])).
+
 ez() ->
 	Ebin = filelib:wildcard("ebin/*"),
 	Deps = filelib:wildcard("deps/*/ebin/*"),
@@ -76,9 +78,14 @@ main([ScriptNm]) ->
 	end,
 	
 	% spawn nodes
-	RunPids = 
+	_RunPids = 
 	[begin
-		RunCmd = proplists:get_value(cmd,Nd,""),
+		case proplists:get_value(cmd,Nd,"") of
+			"" ->
+				RunCmd = proplists:get_value(cmd,Cfg);
+			RunCmd ->
+				ok
+		end,
 		AppPth = lists:flatten([Path,"/",ndnm(Nd),"/etc/app.config"]),
 		case filelib:is_regular(AppPth) of
 			true ->
@@ -96,28 +103,58 @@ main([ScriptNm]) ->
 
 		Ebins = string:join([filename:absname(Nm) || Nm <- ["ebin"|filelib:wildcard("deps/*/ebin")]]," "),
 		Cmd = "erl -noshell -noinput -pa "++Ebins++" "++AppCmd++VmCmd++" "++RunCmd,
-		spawn(fun() -> run(Cmd) end)
+		timer:sleep(300),
+		run(Cmd)
 	end || Nd <- Nodes],
 	
 	case connect(Nodes,0) of
 		{error,Node} ->
 			?INF("Unable to connect to ~p",[Node]);
 		ok ->
+			?INF("CONNECTED"),
 			% Give it time to start up
-			timer:sleep(5000),
-			case catch apply(Mod,run,[?PATH]) of
-				{'EXIT',Err1} ->
-					?INF("Test failed ~p",[Err1]);
-				_ ->
-					?INF("Test finished")
+			% timer:sleep(5000),
+			case wait_app(Nodes,proplists:get_value(wait_for,Cfg),os:timestamp()) of
+				{error,Node} ->
+					?INF("Timeout waiting for app to start on ~p",[Node]);
+				ok ->
+					case catch apply(Mod,run,[?PATH]) of
+						{'EXIT',Err1} ->
+							?INF("Test failed ~p",[Err1]);
+						_ ->
+							?INF("Test finished")
+					end
 			end
 	end,
 
+	{StopMod,StopFunc,StopArg} = proplists:get_value(stop,Cfg,{init,stop,[]}),
+
 	% [Pid ! stop || Pid <- RunPids],
-	Pids = [spawn(fun() -> rpc:call(proplists:get_value(distname,Nd),init,stop,[]) end) || Nd <- Nodes],
+	Pids = [spawn(fun() -> rpc:call(proplists:get_value(distname,Nd),StopMod,StopFunc,StopArg) end) || Nd <- Nodes],
 	wait_pids(Pids),
 	apply(Mod,cleanup,[?PATH]).
 
+wait_app(_,undefined,Started) ->
+	ok;
+wait_app([H|T],App,Started) ->
+	case timer:now_diff(os:timestamp(),Started) > 30*1000000 of
+		true ->
+			{error,H};
+		_ ->
+			case rpc:call(proplists:get_value(distname,H),application,which_applications,[],1000) of
+				[_|_] = L ->
+					case lists:keymember(App,1,L) of
+						true ->
+							wait_app(T,App,Started);
+						false ->
+							wait_app([H|T],App,Started)
+					end;
+				_ ->
+					wait_app([H|T],App,Started)
+			end
+	end;
+wait_app([],_,_) ->
+	ok.
 
 run(Cmd) ->
 	% receive
@@ -127,9 +164,8 @@ run(Cmd) ->
 	% 		ok
 	% end,
 	?INF("Running ~p",[Cmd]),
-	_X = os:cmd(Cmd),
-	% io:format("Node finished. ~p~n",[X]).
-	ok.
+	spawn(fun() -> _X = os:cmd(Cmd) end).
+		% io:format("Node finished. ~p~n",[X]).
 
 wait_pids([H|T]) ->
 	case erlang:is_process_alive(H) of
@@ -143,6 +179,7 @@ wait_pids([]) ->
 	ok.
 
 connect([H|T],N) when N < 100 ->
+	?INF("Connecting to ~p",[H]),
 	Node = proplists:get_value(distname,H,""),
 	case net_kernel:hidden_connect(Node) of
 		true ->
