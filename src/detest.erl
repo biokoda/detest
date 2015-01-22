@@ -1,7 +1,8 @@
 -module(detest).
 -export([main/1,ez/0]).
 -define(PATH,".detest").
-
+-define(INF(F,Param),io:format("~p ~p:~p ~s~n",[time(),?MODULE,?LINE,io_lib:fwrite(F,Param)])).
+-define(INF(F),?INF(F,[])).
 ez() ->
 	Ebin = filelib:wildcard("ebin/*"),
 	Deps = filelib:wildcard("deps/*/ebin/*"),
@@ -14,7 +15,7 @@ ez() ->
 	file:write_file("detest.ez",Bin).
 
 main([]) ->
-	io:format("Missing run script parameter.~n");
+	?INF("Missing run script parameter.");
 main([ScriptNm]) ->
 	[] = os:cmd(epmd_path() ++ " -daemon"),
 	case compile:file(ScriptNm,[binary,return_errors]) of
@@ -22,7 +23,7 @@ main([ScriptNm]) ->
 			code:load_binary(Mod, filename:basename(ScriptNm), Bin);
 		Err ->
 			Mod = undefined,
-			io:format("Unable to compile: ~p~n",[Err]),
+			?INF("Unable to compile: ~p",[Err]),
 			halt(1)
 	end,
 	Cfg = apply(Mod,cfg,[]),
@@ -68,7 +69,7 @@ main([ScriptNm]) ->
 
 	case catch apply(Mod,setup,[?PATH]) of
 		{'EXIT',Err0} ->
-			io:format("Setup failed ~p~n",[Err0]),
+			?INF("Setup failed ~p",[Err0]),
 			halt(1);
 		_ ->
 			ok
@@ -100,13 +101,15 @@ main([ScriptNm]) ->
 	
 	case connect(Nodes,0) of
 		{error,Node} ->
-			io:format("Unable to connect to ~p~n",[Node]);
+			?INF("Unable to connect to ~p",[Node]);
 		ok ->
+			% Give it time to start up
+			timer:sleep(5000),
 			case catch apply(Mod,run,[?PATH]) of
 				{'EXIT',Err1} ->
-					io:format("Test failed ~p~n",[Err1]);
+					?INF("Test failed ~p",[Err1]);
 				_ ->
-					io:format("Test finished~n")
+					?INF("Test finished")
 			end
 	end,
 
@@ -123,7 +126,7 @@ run(Cmd) ->
 	% 	after 0 ->
 	% 		ok
 	% end,
-	% io:format("RUnning ~p~n",[Cmd]),
+	?INF("Running ~p",[Cmd]),
 	_X = os:cmd(Cmd),
 	% io:format("Node finished. ~p~n",[X]).
 	ok.
@@ -166,7 +169,6 @@ render_cfg(Cfg,P) ->
 		FN ->
 			Param = []
 	end,
-	% io:format("Render ~p~n",[P++Param]),
 	case apply(modnm(FN),render,[[{basepath,?PATH}|P]++Param]) of
 		{ok,Bin} ->
 			case string:str(FN,"vm.args") of
@@ -177,7 +179,7 @@ render_cfg(Cfg,P) ->
 			end,
 			Bin;
 		Err ->
-			io:format("Error rendering ~p~nParam:~p~nError:~p~n",[FN,P,Err]),
+			?INF("Error rendering ~p~nParam:~p~nError:~p",[FN,P,Err]),
 			halt(1)
 	end.
 
@@ -209,7 +211,7 @@ compile_cfgs(L) ->
 			{ok,_,_} ->
 				ok;
 			Err ->
-				io:format("Error compiling ~p~n~p~n",[dtlnm(Cfg),Err]),
+				?INF("Error compiling ~p~n~p",[dtlnm(Cfg),Err]),
 				halt(1)
 		end
 	end || Cfg <- L].
