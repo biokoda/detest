@@ -16,8 +16,6 @@ ez() ->
 main([]) ->
 	io:format("Missing run script parameter.~n");
 main([ScriptNm]) ->
-	% [code:add_path(Dep) || Dep <- filelib:wildcard("deps/*/ebin")],
-	% code:add_path("ebin"),
 	[] = os:cmd(epmd_path() ++ " -daemon"),
 	case compile:file(ScriptNm,[binary,return_errors]) of
 		{ok,Mod,Bin} ->
@@ -66,9 +64,18 @@ main([ScriptNm]) ->
 		end || NC <- NodeCfgs]
 	end || Nd <- Nodes],
 
-	setup_dist(),
+	setup_dist(),	
 
+	case catch apply(Mod,setup,[?PATH]) of
+		{'EXIT',Err0} ->
+			io:format("Setup failed ~p~n",[Err0]),
+			halt(1);
+		_ ->
+			ok
+	end,
+	
 	% spawn nodes
+	RunPids = 
 	[begin
 		RunCmd = proplists:get_value(cmd,Nd,""),
 		AppPth = lists:flatten([Path,"/",ndnm(Nd),"/etc/app.config"]),
@@ -87,41 +94,44 @@ main([ScriptNm]) ->
 		end,
 
 		Ebins = string:join([filename:absname(Nm) || Nm <- ["ebin"|filelib:wildcard("deps/*/ebin")]]," "),
-		Cmd = "erl -noshell -noinput -pa "++Ebins++" "++AppCmd++VmCmd, %++" "++RunCmd,
-		io:format("Running ~p ~p~n",[Cmd,erlang:get_cookie()]),
-		spawn(fun() -> X = os:cmd(Cmd),	io:format("Node finished. ~p~n",[X]) end)
+		Cmd = "erl -noshell -noinput -pa "++Ebins++" "++AppCmd++VmCmd++" "++RunCmd,
+		spawn(fun() -> run(Cmd) end)
 	end || Nd <- Nodes],
-
-	timer:sleep(1000),
-
-	% FirstNd = ndnm(hd(Nodes)),
-	% case file:read_file([Path,"/",FirstNd,"/etc/vm.args"]) of
-	% 	{ok,FirstVm} ->
-	% 		setup_dist(FirstVm);
-	% 	_ ->
-	% 		setup_dist()
-	% end,
-
-
-	apply(Mod,setup,[?PATH]),
-
-	connect(Nodes,0),
-
-	case catch apply(Mod,run,[?PATH]) of
-		{'EXIT',Err1} ->
-			io:format("Test crashed ~p~n",[Err1]);
-		_ ->
-			ok
+	
+	case connect(Nodes,0) of
+		{error,Node} ->
+			io:format("Unable to connect to ~p~n",[Node]);
+		ok ->
+			case catch apply(Mod,run,[?PATH]) of
+				{'EXIT',Err1} ->
+					io:format("Test failed ~p~n",[Err1]);
+				_ ->
+					io:format("Test finished~n")
+			end
 	end,
+
+	% [Pid ! stop || Pid <- RunPids],
 	Pids = [spawn(fun() -> rpc:call(proplists:get_value(distname,Nd),init,stop,[]) end) || Nd <- Nodes],
 	wait_pids(Pids),
-	
 	apply(Mod,cleanup,[?PATH]).
+
+
+run(Cmd) ->
+	% receive
+	% 	stop ->
+	% 		exit(normal)
+	% 	after 0 ->
+	% 		ok
+	% end,
+	% io:format("RUnning ~p~n",[Cmd]),
+	_X = os:cmd(Cmd),
+	% io:format("Node finished. ~p~n",[X]).
+	ok.
 
 wait_pids([H|T]) ->
 	case erlang:is_process_alive(H) of
 		true ->
-			timer:sleep(5000),
+			timer:sleep(100),
 			wait_pids([H|T]);
 		false ->
 			wait_pids(T)
@@ -145,8 +155,7 @@ connect([H|T],N) when N < 100 ->
 			connect([H|T],N+1)
 	end;
 connect([H|_],_N) ->
-	io:format("Timeout connect to ~p~n",[H]),
-	halt(1);
+	{error,H};
 connect([],_) ->
 	ok.
 
@@ -225,7 +234,7 @@ parse_args(["#"++_|T],L) ->
 parse_args(["-name " ++ Namestr|T],L) ->
 	Curname = rem_spaces(Namestr),
 	Myname = setname(Curname),
-	io:format("Name ~p ~p~n",[Myname,Namestr]),
+	% io:format("Name ~p ~p~n",[Myname,Namestr]),
 	case node() == 'nonode@nohost' of
 	    true ->
 	    	{ok, _} = net_kernel:start([Myname, longnames]);
