@@ -2,7 +2,7 @@
 -export([main/1,ez/0]).
 -export([]).
 -define(PATH,".detest").
--define(INF(F,Param),io:format("~p ~p:~p ~s~n",[time(),?MODULE,?LINE,io_lib:fwrite(F,Param)])).
+-define(INF(F,Param),io:format("~p ~p: ~s~n",[time(),?MODULE,io_lib:fwrite(F,Param)])).
 -define(INF(F),?INF(F,[])).
 
 ez() ->
@@ -12,13 +12,40 @@ ez() ->
 	[begin
 		{ok,Bin} = file:read_file(Fn),
 		{filename:basename(Fn),Bin}
-	end || Fn <- Ebin++Deps],
+	end || Fn <- Ebin++Deps++["procket","procket.so"]],
 	{ok,{_,Bin}} = zip:create("detest.ez",Files,[memory]),
 	file:write_file("detest.ez",Bin).
 
 main([]) ->
+	case catch escript:script_name() of
+		[_|_] ->
+			{ok,Myself} = file:read_file(escript:script_name()),
+			[_,BinWithoutHead] = binary:split(Myself,<<80,75,3,4>>),
+			ZipBin = <<80,75,3,4,BinWithoutHead/binary>>;
+		_ ->
+			{ok,ZipBin} = file:read_file("detest.ez")
+	end,
+	case zip:extract(ZipBin,[memory]) of
+		{ok,L} ->
+			[begin 
+				file:write_file(Name,PrBin),
+				os:cmd("chmod +x "++Name)
+			end || {Name,PrBin} <- L, Name == "procket" orelse Name == "procket.so"];
+		_ ->
+			ok
+	end,
+	% {ok, FD} = procket:open(64, [{protocol, udp},{type, dgram},{family, inet}]),
+	{ok, Ref} = tuncer:create("tap0", [tap, no_pi, {active, true}]),
+	% {ok, Ref} = tuncer:create("tun0"),
+	?INF("Devnmae ~p",[tuncer:devname(Ref)]),
+	tuncer:up(Ref, "192.168.123.4"),
+	tuncer:destroy(Ref),
 	?INF("Missing run script parameter.");
 main([ScriptNm]) ->
+	% script contains procket and procket.so. Extract those files and write them to local dir. Cleanup when finished.
+	
+
+	
 	[] = os:cmd(epmd_path() ++ " -daemon"),
 	case compile:file(ScriptNm,[binary,return_errors]) of
 		{ok,Mod,Bin} ->
