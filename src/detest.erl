@@ -73,7 +73,13 @@ main(Param) ->
 	% end,
 	os:cmd("rm -rf "++Path),
 
-	NetPid = detest_net:start([butil:ip_to_tuple(ndaddr(Nd)) || Nd <- Nodes]),
+	case detest_net:start([butil:ip_to_tuple(ndaddr(Nd)) || Nd <- Nodes]) of
+		{error,NetPids} ->
+			?INF("Unable to setup interfaces: ~p.~nRun as sudo?",[NetPids]),
+			halt(1);
+		NetPids ->
+			ok
+	end,
 	
 	compile_cfgs(GlobCfgs++NodeCfgs),
 
@@ -101,19 +107,6 @@ main(Param) ->
 	{ok, _} = net_kernel:start([proplists:get_value(runfrom,Cfg,'detest@127.0.0.1'), longnames]),
 	erlang:set_cookie(node(),'detest'),
 
-	timer:sleep(100),
-	case is_pid(NetPid) of
-		true ->
-			case erlang:is_process_alive(NetPid) of
-				true ->
-					ok;
-				false ->
-					?INF("Failed to set network interfaces, run as sudo?"),
-					halt(1)
-			end;
-		_ ->
-			ok
-	end,
 
 	case catch apply(Mod,setup,[?PATH]) of
 		{'EXIT',Err0} ->
@@ -159,8 +152,7 @@ main(Param) ->
 			?INF("Unable to connect to ~p",[Node]);
 		ok ->
 			?INF("CONNECTED"),
-			% Give it time to start up
-			% timer:sleep(5000),
+			timer:sleep(500),
 			case wait_app(Nodes,proplists:get_value(wait_for,Cfg),os:timestamp()) of
 				{error,Node} ->
 					?INF("Timeout waiting for app to start on ~p",[Node]);
@@ -179,8 +171,8 @@ main(Param) ->
 	% [Pid ! stop || Pid <- RunPids],
 	Pids = [spawn(fun() -> rpc:call(proplists:get_value(distname,Nd),StopMod,StopFunc,StopArg) end) || Nd <- Nodes],
 	wait_pids(Pids),
-	butil:safesend(NetPid,stop),
-	wait_pids([NetPid]),
+	[butil:safesend(NetPid,stop) || NetPid <- NetPids],
+	wait_pids(NetPids),
 	apply(Mod,cleanup,[?PATH]).
 
 wait_app(_,undefined,_Started) ->
@@ -272,12 +264,6 @@ render_cfg(Cfg,P) ->
 	end,
 	case apply(modnm(FN),render,[[{basepath,?PATH}|P]++Param]) of
 		{ok,Bin} ->
-			% case string:str(FN,"vm.args") of
-			% 	0 ->
-			% 		ok;
-			% 	_ ->
-			% 		setup_dist(iolist_to_binary(Bin))
-			% end,
 			Bin;
 		Err ->
 			?INF("Error rendering ~p~nParam:~p~nError:~p",[FN,P,Err]),
@@ -324,65 +310,6 @@ compile_cfgs(L) ->
 		end
 	end || Cfg <- L].
 
-% setup_dist() ->
-% 	setup_dist(<<>>).
-% setup_dist(VmBin) ->
-% 	case whereis(net_kernel) of
-% 		undefined when VmBin /= <<>> ->
-% 		  	Lines = string:tokens(binary_to_list(VmBin),"\r\n"),
-% 			parse_args(Lines,[]);
-% 		undefined ->
-% 			{ok, _} = net_kernel:start([setname("a@127.0.0.1"), longnames]);
-% 		_ ->
-% 			ok
-% 	end.
-
-% parse_args([" "++Rem|T],L) ->
-% 	parse_args([Rem|T],L);
-% parse_args(["#"++_|T],L) ->
-% 	parse_args(T,L);
-% parse_args(["-name " ++ Namestr|T],L) ->
-% 	Curname = rem_spaces(Namestr),
-% 	Myname = setname(Curname),
-% 	% io:format("Name ~p ~p~n",[Myname,Namestr]),
-% 	case node() == 'nonode@nohost' of
-% 	    true ->
-% 	    	?INF("Setname ~p",[Myname]),
-% 	    	{ok, _} = net_kernel:start([Myname, longnames]);
-% 	    _ ->
-% 			ok
-% 	end,
-% 	parse_args(T,[{node,list_to_atom(Curname)},{myname,Myname}|L]);
-% parse_args(["-sname " ++ Namestr|T],L) ->
-% 	Curname = rem_spaces(Namestr),
-% 	Myname = setname(Curname),
-% 	case node() == 'nonode@nohost' of
-% 		true ->
-% 	    	{ok, _} = net_kernel:start([Myname, shortnames]);
-% 	    _ ->
-% 	      	ok
-% 	end,
-% 	parse_args(T,[{node,list_to_atom(Curname)},{myname,Myname}|L]);
-% parse_args(["-setcookie "++N|T],L) ->
-% 	erlang:set_cookie(node(), list_to_atom(rem_spaces(N))),
-% 	parse_args(T,L);
-% parse_args([_|T],L) ->
-%   parse_args(T,L);
-% parse_args([],L) ->
-% 	L.
-
-% setname(Namestr) ->
-% 	{MS,S,MiS} = now(),
-% 	Nm = integer_to_list(MS*1000000000000 + S*1000000 + MiS),
-% 	case string:tokens(rem_spaces(Namestr),"@") of
-% 		[_Name,Addr] ->
-% 			list_to_atom(Nm++"@"++"127.0.0.1");
-% 		[_Name] ->
-% 			list_to_atom(Nm)
-% 	end.
-
-% rem_spaces(Str) ->
-% 	lists:filter(fun(X) -> X /= $\s end,Str).
 
 epmd_path() ->
   ErtsBinDir = filename:dirname(element(2,file:get_cwd())),
