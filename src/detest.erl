@@ -46,7 +46,6 @@ main(Param) ->
 		_ ->
 			ok
 	end,
-	% script contains procket and procket.so. Extract those files and write them to local dir. Cleanup when finished.	
 	[] = os:cmd(epmd_path() ++ " -daemon"),
 	case compile:file(ScriptNm,[binary,return_errors]) of
 		{ok,Mod,Bin} ->
@@ -61,19 +60,12 @@ main(Param) ->
 	NodeCfgs = proplists:get_value(per_node_cfg,Cfg),
 	Nodes = proplists:get_value(nodes,Cfg),
 	Path = ?PATH,
-	% Path = proplists:get_value(path,Cfg,"test/run"),
-	% script path without name of script
-	% LowestPath = filename:join(lists:reverse(tl(lists:reverse(filename:split(filename:absname(escript:script_name())))))),
-	% case lists:prefix(LowestPath, filename:absname(Path)) of
-	% 	true ->
-	% 		ok;
-	% 	false ->
-	% 		io:format("Test path must not be higher than path of executable~n"),
-	% 		halt(1)
-	% end,
+
 	os:cmd("rm -rf "++Path),
 
-	case detest_net:start([butil:ip_to_tuple(ndaddr(Nd)) || Nd <- Nodes]) of
+	case detest_net:start([{butil:ip_to_tuple(ndaddr(Nd)),
+							proplists:get_value(delay,Nd,{0,0}),
+							ndnm(Nd)} || Nd <- Nodes]) of
 		{error,NetPids} ->
 			?INF("Unable to setup interfaces: ~p.~nRun as sudo?",[NetPids]),
 			halt(1);
