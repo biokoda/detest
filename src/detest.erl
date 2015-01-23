@@ -2,7 +2,13 @@
 -export([main/1,ez/0]).
 -export([]).
 -define(PATH,".detest").
--define(INF(F,Param),io:format("~p ~p: ~s~n",[time(),?MODULE,io_lib:fwrite(F,Param)])).
+-define(INF(F,Param),
+	case butil:ds_val(quiet,cfg) of 
+	true ->
+		ok;
+	_ ->
+		io:format("~p ~p: ~s~n",[time(),?MODULE,io_lib:fwrite(F,Param)])
+	end).
 -define(INF(F),?INF(F,[])).
 
 ez() ->
@@ -21,7 +27,8 @@ main([]) ->
 	io:format("Command: ./detest <options> yourscript.erl~n"++
 		"Options:~n"
 		"-h    print help~n"++
-		"-v    print stdout from nodes~n");
+		"-v    print stdout from nodes~n"++
+		"-q    quiet~n");
 main(["-h"]) ->
 	main([]);
 main(Param) ->
@@ -30,6 +37,12 @@ main(Param) ->
 	case lists:member("-v",Param) of
 		true ->
 			butil:ds_add(verbose,true,cfg);
+		_ ->
+			ok
+	end,
+	case lists:member("-q",Param) of
+		true ->
+			butil:ds_add(quiet,true,cfg);
 		_ ->
 			ok
 	end,
@@ -378,7 +391,7 @@ epmd_path() ->
     false ->
       case os:find_executable(Name) of
         false ->
-          io:format("Could not find epmd.~n"),
+          ?INF("Could not find epmd.~n"),
           halt(1);
         GlobalEpmd ->
           GlobalEpmd
