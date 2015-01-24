@@ -69,9 +69,10 @@ main(Param) ->
 							proplists:get_value(delay,Nd,{0,0}),
 							ndnm(Nd)} || Nd <- Nodes]) of
 		{error,NetPids} ->
+			DetestName = undefined,
 			?INF("Unable to setup interfaces. Run as sudo? Kill your vpn app?~nFailed:~p",[NetPids]),
 			halt(1);
-		NetPids ->
+		{ok,NetPids,DetestName} ->
 			ok
 	end,
 	
@@ -98,7 +99,7 @@ main(Param) ->
 	end || Nd <- Nodes],
 
 	% setup_dist(),
-	{ok, _} = net_kernel:start([proplists:get_value(runfrom,Cfg,'detest@127.0.0.1'), longnames]),
+	{ok, _} = net_kernel:start([DetestName, longnames]),
 	erlang:set_cookie(node(),'detest'),
 
 

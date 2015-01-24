@@ -16,7 +16,7 @@ cfg() ->
 			"end\""
 			},
 	 {nodes,[
-	 		 [{distname,?ND1},{delay,800}], 
+	 		 [{distname,?ND1},{delay,1000}], 
 	 		 [{distname,?ND2}]
 	 		]}
 	].
@@ -30,6 +30,7 @@ cleanup(_Pth) ->
 
 run(_Pth) ->
 	rpc:call(?ND1,?MODULE,call_start,[?ND2]),
+	timer:sleep(5000),
 	% rpc:call(?ND2,?MODULE,call_start,[?ND1]),
 	ok.
 

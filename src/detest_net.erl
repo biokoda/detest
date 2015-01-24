@@ -23,8 +23,19 @@ set_delay(Nm,Delay) ->
 	end.
 
 
+ip_for_detest({192,168,C,D},L) when C < 255, D == 255 ->
+	ip_for_detest({192,168,C+1,1},L);
+ip_for_detest({192,168,C,D} = IP,L) when C < 255, D < 255 ->
+	case lists:member(IP,L) of
+		true ->
+			ip_for_detest({192,168,C,D+1},L);
+		false ->
+			{192,168,C,D}
+	end.
 
-
+tuple_to_atom({A,B,C,D}) ->
+	list_to_atom("detest@"++integer_to_list(A)++"."++integer_to_list(B)++"."++
+	integer_to_list(C)++"."++integer_to_list(D)).
 
 start(L) ->
 	% First checks if necessary. It only runs if all IPs in L do not exist yet.
@@ -34,20 +45,25 @@ start(L) ->
 	case JustLIps -- ExistingIps of
 		JustLIps ->
 			setup_ext(),
+
+			DetestIP = ip_for_detest({192,168,100,1},ExistingIps++JustLIps),
+			DetestName = tuple_to_atom(DetestIP),
+
 			Home = self(),
 			% Every IP has his own process
 			{Pids,_} = lists:foldl(fun({IP,Delay,Nm},{Pids,N}) -> 
 				{[{spawn(fun() -> route(IP,Nm,N,Home,Delay) end),IP,N}|Pids], N+1} end, 
-			{[],0}, L),
+			{[],0}, [{DetestIP,{1000,0}, DetestName}|L]),
 			
 			case wait_ack(Pids) of
 				ok ->
 					spawn(fun() -> Pids1 = [begin erlang:monitor(process,P),P end || {P,_,_} <- Pids], cleanup(Pids1) end),
 					% Return list of pids and also inform every pid of where everyone else is
-					[begin
+					Out = [begin
 						Pid ! {peerlist, Pids},
 						Pid
-					end || {Pid,_,_} <- Pids];
+					end || {Pid,_,_} <- Pids],
+					{ok,Out,DetestName};
 				{error,Faults} ->
 					{error,[IP || {_,IP,_} <- Faults]}
 			end;
