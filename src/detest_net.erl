@@ -1,5 +1,8 @@
 -module(detest_net).
--export([start/1,toggle_online/2]).
+% script api
+-export([toggle_online/2, set_delay/2]).
+% internal call
+-export([start/1]).
 
 toggle_online(Nm,Bool) when Bool == true; Bool == false ->
 	case butil:ds_val(Nm,cfg) of
@@ -8,6 +11,20 @@ toggle_online(Nm,Bool) when Bool == true; Bool == false ->
 		Pid ->
 			Pid ! {toggle,Bool}
 	end.
+
+set_delay(Nm,{N1,0}) when N1 > 0 ->
+	set_delay(Nm,{N1,1});
+set_delay(Nm,Delay) ->
+	case butil:ds_val(Nm,cfg) of
+		undefined ->
+			false;
+		Pid ->
+			Pid ! {set_delay,Delay}
+	end.
+
+
+
+
 
 start(L) ->
 	% First checks if necessary. It only runs if all IPs in L do not exist yet.
@@ -39,14 +56,27 @@ start(L) ->
 	end.
 
 -record(dev,{name, dev, ip, index, peers = [], delay = {0,0},
-	online = true, nextDelay = 0,
-	in_buf = [], in_reversed = [], in_unreveresed = [],
-	out_buf = [], out_reversed = [], out_unreveresed = []}).
-route(IP,Name,Index,Home,Delay) ->
-	R = create_device(IP,Index),
+	online = true, 
+	in_buf = [], in_reversed = [], in_unreversed = [],
+	out_buf = [], out_reversed = [], out_unreversed = []}).
+route(IP,Name,Index,Home,Delay1) ->
+	case ok of
+		_ when element(1,Delay1) > 0, element(2,Delay1) == 0 ->
+			Delay = {element(1,Delay1),1};
+		_ when is_integer(Delay1) ->
+			Delay = {Delay1,1};
+		_ ->
+			Delay = Delay1
+	end,
 	Home ! {done,Index},
-	erlang:send_after(10,self(),timeout),
+	case Delay of
+		{0,0} ->
+			ok;
+		_ ->
+			erlang:send_after(10,self(),timeout)
+	end,
 	butil:ds_add(Name,self(),cfg),
+	R = create_device(IP,Index),
 	route1(false,R#dev{delay = {element(1,Delay)*1000,element(2,Delay)*1000}, name = Name}).
 
 
@@ -54,16 +84,17 @@ route(IP,Name,Index,Home,Delay) ->
 % Keep track of time with timer. Join frames into 10ms buffers.
 % Theoretically 10ms at least. Erlang timers are not that exact so it may be skewed.
 % Unpredictable delay is fine. Networks are unpredictable anyway.
-route1(Time,#dev{in_reversed = []} = R) when R#dev.in_unreveresed /= [] ->
-	route1(Time,R#dev{in_reversed = lists:reverse(R), in_unreveresed = []});
-route1(Time,#dev{out_reversed = []} = R) when R#dev.out_unreveresed /= [] ->
-	route1(Time,R#dev{out_reversed = lists:reverse(R), out_unreveresed = []});
+route1(Time,#dev{in_reversed = []} = R) when R#dev.in_unreversed /= [] ->
+	route1(Time,R#dev{in_reversed = lists:reverse(R#dev.in_unreversed), in_unreversed = []});
+route1(Time,#dev{out_reversed = []} = R) when R#dev.out_unreversed /= [] ->
+	route1(Time,R#dev{out_reversed = lists:reverse(R#dev.out_unreversed), out_unreversed = []});
 route1({_,_,_} = Now, R) ->
 	case R of
 		#dev{in_reversed = [{Time,L}|_]} ->
 			Diff = timer:now_diff(Now,Time),
 			case Diff >= (element(1,R#dev.delay) + random:uniform(element(2,R#dev.delay))) of
 				true ->
+					% lager:info("Sending! in rev ~p",[Diff]),
 					[tuncer:send(R#dev.dev,Bin) || Bin <- L],
 					Again = true,
 					InRev = tl(R#dev.in_reversed);
@@ -80,6 +111,7 @@ route1({_,_,_} = Now, R) ->
 			Diff2 = timer:now_diff(Now,Time2),
 			case Diff2 >= (element(1,R#dev.delay) + random:uniform(element(2,R#dev.delay))) of
 				true ->
+					% lager:info("Sending! out rev ~p",[Diff2]),
 					[[P ! Data || P <- R#dev.peers] || Data <- L2],
 					Again1 = true,
 					OutRev = tl(R#dev.out_reversed);
@@ -91,7 +123,7 @@ route1({_,_,_} = Now, R) ->
 			Again1 = false,
 			OutRev = R#dev.out_reversed
 	end,
-	NR = #dev{out_reversed = OutRev, in_reversed = InRev},
+	NR = R#dev{out_reversed = OutRev, in_reversed = InRev},
 	case Again orelse Again1 of
 		true ->
 			route1(os:timestamp(),NR);
@@ -102,11 +134,16 @@ route1(_,R) ->
 	route2(R).
 route2(R) ->
 	receive
-		{tuntap, Dev, Data} ->
+		{tuntap, _Dev, Data} ->
+			% lager:info("Received tuntap ~p ~p~n",[R#dev.peers,pkt:decode(Data)]),
 			case R#dev.online of
 				true when R#dev.delay /= {0,0} ->
+					% lager:info("Buffering tuntap ~p",[length(R#dev.out_buf)]),
 					route1(false,R#dev{out_buf = [Data|R#dev.out_buf]});
+				% true when R#dev.delay /= {0,0} ->
+				% 	route1(false,R#dev{out_unreversed = [{os:timestamp(),Data}|R#dev.out_unreversed]});
 				true ->
+					% lager:info("No buffering out"),
 					[P ! Data || P <- R#dev.peers],
 					route2(R);
 				false ->
@@ -115,8 +152,12 @@ route2(R) ->
 		<<_/binary>> = Bin ->
 			case R#dev.online of
 				true when R#dev.delay /= {0,0} ->
+					% lager:info("Buffering input ~p",[length(R#dev.in_buf)]),
 					route1(false,R#dev{in_buf = [Bin|R#dev.in_buf]});
+				% true when R#dev.delay /= {0,0} ->
+				% 	route1(false,R#dev{in_unreversed = [{os:timestamp(),Bin}|R#dev.in_unreversed]});
 				true ->
+					% lager:info("No buffering in"),
 					tuncer:send(R#dev.dev,Bin),
 					route2(R);
 				false ->
@@ -127,21 +168,31 @@ route2(R) ->
 			erlang:send_after(10,self(),timeout),
 			case R#dev.in_buf of
 				[] ->
-					InUnrev = R#dev.in_unreveresed;
+					InUnrev = R#dev.in_unreversed;
 				_ ->
-					InUnrev = [{Now,lists:reverse(R#dev.in_buf)}|R#dev.in_unreveresed]
+					% lager:info("Timeout inbuf ~p",[length(R#dev.in_buf)]),
+					InUnrev = [{Now,lists:reverse(R#dev.in_buf)}|R#dev.in_unreversed]
 			end,
 			case R#dev.out_buf of
 				[] ->
-					OutUnrev = R#dev.out_unreveresed;
+					OutUnrev = R#dev.out_unreversed;
 				_ ->
-					OutUnrev = [{Now,lists:reverse(R#dev.out_buf)}|R#dev.out_unreveresed]
+					% lager:info("Timeout outbuf ~p",[length(R#dev.out_buf)]),
+					OutUnrev = [{Now,lists:reverse(R#dev.out_buf)}|R#dev.out_unreversed]
 			end,
 			route1(Now,R#dev{out_buf = [], in_buf = [], 
-						in_unreveresed = InUnrev,
-						out_unreveresed = OutUnrev});
+						in_unreversed = InUnrev,
+						out_unreversed = OutUnrev});
 		{toggle,Bool} ->
 			route1(false,R#dev{online = Bool});
+		{set_delay,Delay} ->
+			case R#dev.delay of
+				{0,0} when Delay /= {0,0} ->
+					erlang:send_after(10,self(),timeout);
+				_ ->
+					ok
+			end,
+			route1(false,R#dev{delay = Delay});
 		{peerlist,L} ->
 			route1(false,R#dev{peers = [Pid || {Pid,_Ip,Index} <- L, Index /= R#dev.index]});
 		stop ->
@@ -166,7 +217,7 @@ cleanup([]) ->
 	file:delete("procket.so");
 cleanup(Pids) ->
 	receive
-		{'DOWN',_Monitor,_,Pid,Reason} ->
+		{'DOWN',_Monitor,_,Pid,_Reason} ->
 			cleanup(lists:delete(Pid,Pids))
 	end.
 
@@ -174,7 +225,7 @@ create_device(IP,N) ->
 	Nm = "tap"++integer_to_list(N),
 	{ok, Dev} = tuncer:create(Nm, [tap, no_pi, {active, true}]),
 	ok = tuncer:up(Dev, IP),
-	R = #dev{dev = Dev, ip = IP, index = N}.
+	#dev{dev = Dev, ip = IP, index = N}.
 
 
 setup_ext() ->

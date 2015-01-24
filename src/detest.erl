@@ -47,7 +47,9 @@ main(Param) ->
 			ok
 	end,
 	[] = os:cmd(epmd_path() ++ " -daemon"),
-	case compile:file(ScriptNm,[binary,return_errors]) of
+	application:ensure_all_started(lager),
+
+	case compile:file(ScriptNm,[binary,return_errors,{parse_transform, lager_transform}]) of
 		{ok,Mod,Bin} ->
 			code:load_binary(Mod, filename:basename(ScriptNm), Bin);
 		Err ->
@@ -56,8 +58,8 @@ main(Param) ->
 			halt(1)
 	end,
 	Cfg = apply(Mod,cfg,[]),
-	GlobCfgs = proplists:get_value(global_cfg,Cfg),
-	NodeCfgs = proplists:get_value(per_node_cfg,Cfg),
+	GlobCfgs = proplists:get_value(global_cfg,Cfg,[]),
+	NodeCfgs = proplists:get_value(per_node_cfg,Cfg,[]),
 	Nodes = proplists:get_value(nodes,Cfg),
 	Path = ?PATH,
 
@@ -67,7 +69,7 @@ main(Param) ->
 							proplists:get_value(delay,Nd,{0,0}),
 							ndnm(Nd)} || Nd <- Nodes]) of
 		{error,NetPids} ->
-			?INF("Unable to setup interfaces: ~p.~nRun as sudo?",[NetPids]),
+			?INF("Unable to setup interfaces. Run as sudo? Kill your vpn app?~nFailed:~p",[NetPids]),
 			halt(1);
 		NetPids ->
 			ok
@@ -109,7 +111,7 @@ main(Param) ->
 	end,
 	
 	% spawn nodes
-	_RunPids = 
+	RunPids = 
 	[begin
 		case proplists:get_value(cmd,Nd,"") of
 			"" ->
@@ -143,7 +145,6 @@ main(Param) ->
 		{error,Node} ->
 			?INF("Unable to connect to ~p",[Node]);
 		ok ->
-			?INF("CONNECTED"),
 			timer:sleep(500),
 			case wait_app(Nodes,proplists:get_value(wait_for,Cfg),os:timestamp()) of
 				{error,Node} ->
@@ -153,7 +154,7 @@ main(Param) ->
 						{'EXIT',Err1} ->
 							?INF("Test failed ~p",[Err1]);
 						_ ->
-							?INF("Test finished")
+							?INF("Test finished.")
 					end
 			end
 	end,
@@ -164,6 +165,10 @@ main(Param) ->
 	Pids = [spawn(fun() -> rpc:call(proplists:get_value(distname,Nd),StopMod,StopFunc,StopArg) end) || Nd <- Nodes],
 	wait_pids(Pids),
 	[butil:safesend(NetPid,stop) || NetPid <- NetPids],
+	timer:sleep(200),
+	% If nodes still alive, kill them forcefully
+	[RP ! stop || RP <- RunPids],
+	timer:sleep(200),
 	wait_pids(NetPids),
 	apply(Mod,cleanup,[?PATH]).
 
@@ -193,10 +198,10 @@ run([_|_] = Cmd) ->
 	?INF("Running ~p",[Cmd]),
 	spawn(fun() ->
 		Port = open_port({spawn,Cmd},[exit_status,use_stdio,binary,stream]),
-		run(Port)
-	end
-	);
-run(Port) ->
+		{os_pid,OsPid} = erlang:port_info(Port,os_pid),
+		run(Port,OsPid)
+	end).
+run(Port,OsPid) ->
 	receive
 		{Port,{exit_status,_Status}} ->
 			ok;
@@ -207,7 +212,9 @@ run(Port) ->
 				_ ->
 					ok
 			end,
-			run(Port)
+			run(Port,OsPid);
+		stop ->
+			os:cmd("kill "++integer_to_list(OsPid))
 	end.
 
 wait_pids([undefined|T]) ->
