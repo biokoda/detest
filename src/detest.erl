@@ -18,7 +18,8 @@ ez() ->
 	[begin
 		{ok,Bin} = file:read_file(Fn),
 		{filename:basename(Fn),Bin}
-	end || Fn <- Ebin++Deps++["procket","procket.so"]],
+	end || Fn <- Ebin++Deps], 
+	%["procket","procket.so"]
 	{ok,{_,Bin}} = zip:create("detest.ez",Files,[memory]),
 	file:write_file("detest.ez",Bin).
 
@@ -65,16 +66,17 @@ main(Param) ->
 
 	os:cmd("rm -rf "++Path),
 
-	case detest_net:start([{butil:ip_to_tuple(ndaddr(Nd)),
-							proplists:get_value(delay,Nd,{0,0}),
-							ndnm(Nd)} || Nd <- Nodes]) of
-		{error,NetPids} ->
-			DetestName = undefined,
-			?INF("Unable to setup interfaces. Run as sudo? Kill your vpn app?~nFailed:~p",[NetPids]),
-			halt(1);
-		{ok,NetPids,DetestName} ->
-			ok
-	end,
+	% case detest_net:start([{butil:ip_to_tuple(ndaddr(Nd)),
+	% 						proplists:get_value(delay,Nd,{0,0}),
+	% 						ndnm(Nd)} || Nd <- Nodes]) of
+	% 	{error,NetPids} ->
+	% 		DetestName = undefined,
+	% 		?INF("Unable to setup interfaces. Run as sudo? Kill your vpn app?~nFailed:~p",[NetPids]),
+	% 		halt(1);
+	% 	{ok,NetPids,DetestName} ->
+	% 		ok
+	% end,
+	NetPids = [],
 	
 	compile_cfgs(GlobCfgs++NodeCfgs),
 
@@ -82,7 +84,7 @@ main(Param) ->
 	[begin
 		filelib:ensure_dir([Path,"/",ndnm(Nd),"/etc"]),
 		[begin
-			FBin = render_cfg(G,[{nodes,Nodes}]),
+			FBin = render_cfg(G,[{nodes,[[{distname,distname(Nd)}|Nd] || Nd <- Nodes]}]),
 			Nm = [Path,"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(G))],
 			filelib:ensure_dir(Nm),
 			ok = file:write_file(Nm,FBin)
@@ -99,7 +101,7 @@ main(Param) ->
 	end || Nd <- Nodes],
 
 	% setup_dist(),
-	{ok, _} = net_kernel:start([DetestName, longnames]),
+	{ok, _} = net_kernel:start(['detest@127.0.0.1', longnames]),
 	erlang:set_cookie(node(),'detest'),
 
 
@@ -136,11 +138,13 @@ main(Param) ->
 		end,
 
 		Ebins = string:join([filename:absname(Nm) || Nm <- ["ebin"|filelib:wildcard("deps/*/ebin")]]," "),
-		Cmd = "erl -noshell -noinput -setcookie detest -name "++atom_to_list(proplists:get_value(distname,Nd))++
+		Cmd = "erl -noshell -noinput -setcookie detest -name "++atom_to_list(distname(Nd))++
 				" -pa "++Ebins++" "++AppCmd++VmCmd++" "++RunCmd,
 		timer:sleep(300),
 		run(Cmd)
 	end || Nd <- Nodes],
+
+	DistNames = [{proplists:get_value(name,Nd),distname(Nd)} || Nd <- Nodes],
 	
 	case connect(Nodes,os:timestamp()) of
 		{error,Node} ->
@@ -151,7 +155,7 @@ main(Param) ->
 				{error,Node} ->
 					?INF("Timeout waiting for app to start on ~p",[Node]);
 				ok ->
-					case catch apply(Mod,run,[?PATH]) of
+					case catch apply(Mod,run,[DistNames,?PATH]) of
 						{'EXIT',Err1} ->
 							?INF("Test failed ~p",[Err1]);
 						_ ->
@@ -163,7 +167,7 @@ main(Param) ->
 	{StopMod,StopFunc,StopArg} = proplists:get_value(stop,Cfg,{init,stop,[]}),
 
 	% [Pid ! stop || Pid <- RunPids],
-	Pids = [spawn(fun() -> rpc:call(proplists:get_value(distname,Nd),StopMod,StopFunc,StopArg) end) || Nd <- Nodes],
+	Pids = [spawn(fun() -> rpc:call(distname(Nd),StopMod,StopFunc,StopArg) end) || Nd <- Nodes],
 	wait_pids(Pids),
 	[butil:safesend(NetPid,stop) || NetPid <- NetPids],
 	timer:sleep(200),
@@ -180,7 +184,7 @@ wait_app([H|T],App,Started) ->
 		true ->
 			{error,H};
 		_ ->
-			case rpc:call(proplists:get_value(distname,H),application,which_applications,[],1000) of
+			case rpc:call(distname(H),application,which_applications,[],1000) of
 				[_|_] = L ->
 					case lists:keymember(App,1,L) of
 						true ->
@@ -237,7 +241,7 @@ connect([H|T],Start) ->
 			{error,H};
 		_ ->
 			?INF("Connecting to ~p",[ndnm(H)]),
-			Node = proplists:get_value(distname,H,""),
+			Node = distname(H),
 			case net_kernel:hidden_connect(Node) of
 				true ->
 					case net_adm:ping(Node) of
@@ -274,18 +278,29 @@ modnm(FN) ->
 	list_to_atom(filename:basename(FN)).
 
 ndnm([{_,_}|_] = N) ->
-	ndnm(proplists:get_value(distname,N,""));
+	ndnm(proplists:get_value(name,N,""));
 ndnm(N) ->
 	NS = atom_to_list(N),
 	[NS1|_] = string:tokens(NS,"@"),
 	NS1.
 
-ndaddr([{_,_}|_] = N) ->
-	ndaddr(proplists:get_value(distname,N,""));
-ndaddr(N) ->
-	NS = atom_to_list(N),
-	[_,Addr] = string:tokens(NS,"@"),
-	Addr.
+distname([{_,_}|_] = N) ->
+	distname(proplists:get_value(name,N,""));
+distname(N) ->
+	case os:type() of
+		% {unix,linux} ->
+		% 	N;
+		{_,_} ->
+			[Nm|_] = string:tokens(atom_to_list(N),"@"),
+			list_to_atom(Nm++"@127.0.0.1")
+	end.
+
+% ndaddr([{_,_}|_] = N) ->
+% 	ndaddr(proplists:get_value(name,N,""));
+% ndaddr(N) ->
+% 	NS = atom_to_list(N),
+% 	[_,Addr] = string:tokens(NS,"@"),
+% 	Addr.
 
 dtlnm(G) ->
 	case G of

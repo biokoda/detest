@@ -1,3 +1,7 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% NOT USED. abandoned idea to use tun/tap.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 -module(detest_net).
 % script api
 -export([toggle_online/2, set_delay/2]).

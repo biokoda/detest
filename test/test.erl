@@ -1,12 +1,10 @@
 -module(test).
 % mandatory detest functions
--export([cfg/0,run/1,setup/1,cleanup/1]).
+-export([cfg/0,run/2,setup/1,cleanup/1]).
 % test functions
 -export([call_start/1,call_receive/1]).
 % assert macros
 -include_lib("eunit/include/eunit.hrl").
--define(ND1,'node1@192.168.100.111').
--define(ND2,'node2@192.168.100.112').
 
 cfg() ->
 	[{cmd,"-eval \"begin "++
@@ -16,8 +14,8 @@ cfg() ->
 			"end\""
 			},
 	 {nodes,[
-	 		 [{distname,?ND1},{delay,1000}], 
-	 		 [{distname,?ND2}]
+	 		 [{name,node1},{delay,1000}], 
+	 		 [{name,node2}]
 	 		]}
 	].
 
@@ -28,10 +26,12 @@ cleanup(_Pth) ->
 	ok.
 
 
-run(_Pth) ->
-	rpc:call(?ND1,?MODULE,call_start,[?ND2]),
-	timer:sleep(5000),
-	% rpc:call(?ND2,?MODULE,call_start,[?ND1]),
+run(Nodes,_Pth) ->
+	% Get dist name for RPC.
+	Node1 = proplists:get_value(node1,Nodes),
+	Node2 = proplists:get_value(node2,Nodes),
+	{ok,Node2} = rpc:call(Node1,?MODULE,call_start,[Node2]),
+	{ok,Node1} = rpc:call(Node2,?MODULE,call_start,[Node1]),
 	ok.
 
 
@@ -40,4 +40,5 @@ call_start(Nd) ->
 	rpc:call(Nd,?MODULE,call_receive,[node()]).
 
 call_receive(From) ->
-	lager:info("Received call on=~p from=~p, at=~p~n",[node(), From, time()]).
+	lager:info("Received call on=~p from=~p, at=~p~n",[node(), From, time()]),
+	{ok,node()}.
