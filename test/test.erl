@@ -1,6 +1,6 @@
 -module(test).
 % mandatory detest functions
--export([cfg/0,run/2,setup/1,cleanup/1]).
+-export([cfg/0,run/3,setup/1,cleanup/1]).
 % test functions
 -export([call_start/1,call_receive/1]).
 % assert macros
@@ -26,7 +26,7 @@ cleanup(_Pth) ->
 	ok.
 
 
-run(Nodes,_Pth) ->
+run(Nodes,_Pth,_ScriptParam) ->
 	% Get dist name for RPC.
 	Node1 = proplists:get_value(node1,Nodes),
 	Node2 = proplists:get_value(node2,Nodes),

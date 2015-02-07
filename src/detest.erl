@@ -35,12 +35,13 @@ add_node(P1,NewCfg) ->
 	butil:ds_add(per_node_cfg,NodeCfgs,etscfg),
 	% add node to nodes
 	P = [{distname, DistName}|P1],
+	% node might already be in cfg (if it was added, stopped then started again)
 	case butil:findobj(distname,DistName,butil:ds_val(nodes,etscfg)) of
 		false ->
-			Nodes = butil:ds_val(nodes,etscfg);
-		_ ->
 			Nodes = [P|butil:ds_val(nodes,etscfg)],
-			butil:ds_add(nodes,Nodes,etscfg)
+			butil:ds_add(nodes,Nodes,etscfg);
+		_ ->
+			Nodes = butil:ds_val(nodes,etscfg)
 	end,
 
 	write_global_cfgs(),
@@ -60,7 +61,7 @@ stop_node(Nm) when is_atom(Nm) ->
 	wait_pids([whereis(Nm)]).
 
 main([]) ->
-	io:format("Command: ./detest <options> yourscript.erl~n"++
+	io:format("Command: ./detest <options> yourscript.erl <script_params>~n"++
 		"Options:~n"
 		"-h    print help~n"++
 		"-v    print stdout from nodes~n"++
@@ -68,7 +69,6 @@ main([]) ->
 main(["-h"]) ->
 	main([]);
 main(Param) ->
-	[ScriptNm|_] = lists:reverse(Param),
 	ets:new(etscfg, [named_table,public,set,{read_concurrency,true}]),
 	case lists:member("-v",Param) of
 		true ->
@@ -81,6 +81,14 @@ main(Param) ->
 			butil:ds_add(quiet,true,etscfg);
 		_ ->
 			ok
+	end,
+	case script_param(Param) of
+		{ScriptNm,ScriptParam} ->
+			ok;
+		_ ->
+			ScriptNm = ScriptParam = undefined,
+			io:format("Invalid params~n"),
+			halt(1)
 	end,
 	[] = os:cmd(epmd_path() ++ " -daemon"),
 	application:ensure_all_started(lager),
@@ -153,7 +161,7 @@ main(Param) ->
 				{error,Node} ->
 					?INF("Timeout waiting for app to start on ~p",[Node]);
 				ok ->
-					case catch apply(Mod,run,[DistNames,?PATH]) of
+					case catch apply(Mod,run,[DistNames,?PATH,ScriptParam]) of
 						{'EXIT',Err1} ->
 							?INF("Test failed ~p",[Err1]);
 						_ ->
@@ -161,8 +169,19 @@ main(Param) ->
 					end
 			end
 	end,
-
 	do_stop(Mod,Cfg).
+
+script_param(["-"++_N|T]) ->
+	script_param(T);
+script_param([N|T]) ->
+	case filename:extension(N) of
+		".erl" ->
+			{N,T};
+		_ ->
+			script_param(T)
+	end;
+script_param([]) ->
+	false.
 
 do_stop(Mod,Cfg) ->
 	RunPids = butil:ds_val(runpids,etscfg),
