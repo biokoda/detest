@@ -1,7 +1,7 @@
 -module(detest).
 -export([main/1,ez/0]).
 % API for test module
--export([add_node/1,add_node/2]).
+-export([add_node/1,add_node/2, stop_node/1]).
 -define(PATH,".detest").
 -define(INF(F,Param),
 	case butil:ds_val(quiet,etscfg) of 
@@ -35,8 +35,13 @@ add_node(P1,NewCfg) ->
 	butil:ds_add(per_node_cfg,NodeCfgs,etscfg),
 	% add node to nodes
 	P = [{distname, DistName}|P1],
-	Nodes = [P|butil:ds_val(nodes,etscfg)],
-	butil:ds_add(nodes,Nodes,etscfg),
+	case butil:findobj(distname,DistName,butil:ds_val(nodes,etscfg)) of
+		false ->
+			Nodes = butil:ds_val(nodes,etscfg);
+		_ ->
+			Nodes = [P|butil:ds_val(nodes,etscfg)],
+			butil:ds_add(nodes,Nodes,etscfg)
+	end,
 
 	write_global_cfgs(),
 	write_per_node_cfgs(),
@@ -47,6 +52,12 @@ add_node(P1,NewCfg) ->
 	ok = connect(Nodes),
 	ok = wait_app(Nodes,butil:ds_val(wait_for,etscfg),butil:ds_val(scriptload,etscfg)),
 	DistName.
+
+stop_node([_|_] = Nd) ->
+	stop_node(distname(Nd));
+stop_node(Nm) when is_atom(Nm) ->
+	Nm ! stop,
+	wait_pids([whereis(Nm)]).
 
 main([]) ->
 	io:format("Command: ./detest <options> yourscript.erl~n"++
@@ -155,7 +166,7 @@ main(Param) ->
 
 do_stop(Mod,Cfg) ->
 	RunPids = butil:ds_val(runpids,etscfg),
-	{StopMod,StopFunc,StopArg} = proplists:get_value(stop,Cfg,{init,stop,[]}),
+	{StopMod,StopFunc,StopArg} = butil:ds_val(stop,Cfg,{init,stop,[]}),
 	% Nodelist may have changed, read it from ets
 	Nodes = butil:ds_val(nodes,etscfg),
 	timer:sleep(800),
@@ -248,7 +259,7 @@ wait_app([],_,_,_) ->
 run(Name,[_|_] = Cmd) when is_atom(Name) ->
 	?INF("Running ~s",[Cmd]),
 	spawn(fun() ->
-		% register(Name,self()),
+		register(Name,self()),
 		Port = open_port({spawn,Cmd},[exit_status,use_stdio,binary,stream]),
 		{os_pid,OsPid} = erlang:port_info(Port,os_pid),
 		run(Port,OsPid)
