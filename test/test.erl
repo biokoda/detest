@@ -6,18 +6,18 @@
 % assert macros
 -include_lib("eunit/include/eunit.hrl").
 
+-define(ND1,[{name,node1},{delay,1000}]).
+-define(ND2,[{name,node2}]).
+-define(ND3,[{name,node3}]).
+
 cfg() ->
-	[{cmd,"-eval \"begin "++
-			"application:ensure_all_started(lager),"
-		    "{ok,Mod,Bin} = compile:file('test/test.erl',[binary,return_errors,{parse_transform, lager_transform}]),"++
-			"code:load_binary(Mod, 'test.erl', Bin) "++
-			"end\""
-			},
-	 {nodes,[
-	 		 [{name,node1},{delay,1000}], 
-	 		 [{name,node2}]
-	 		]}
+	[
+	 % {global_cfg,["test/nodelist.cfg"]},
+	 {cmd,"-s lager"},
+	 {wait_for_app,lager},
+	 {nodes,[?ND1,?ND2]}
 	].
+
 
 setup(_Pth) ->
 	ok.
@@ -32,9 +32,13 @@ run(Nodes,_Pth) ->
 	Node2 = proplists:get_value(node2,Nodes),
 	{ok,Node2} = rpc:call(Node1,?MODULE,call_start,[Node2]),
 	{ok,Node1} = rpc:call(Node2,?MODULE,call_start,[Node1]),
+
+	Node3 = detest:add_node(?ND3),
+	{ok,Node1} = rpc:call(Node3,?MODULE,call_start,[Node1]),
 	ok.
 
 
+% This module is loaded inside every executed node. So we can rpc to these functions on every node.
 call_start(Nd) ->
 	lager:info("Calling from=~p to=~p, at=~p~n",[node(), Nd, time()]),
 	rpc:call(Nd,?MODULE,call_receive,[node()]).
