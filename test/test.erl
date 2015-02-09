@@ -1,6 +1,6 @@
 -module(test).
 % mandatory detest functions
--export([cfg/0,run/1,setup/1,cleanup/1]).
+-export([cfg/1,run/1,setup/1,cleanup/1]).
 % test functions
 -export([call_start/1,call_receive/1]).
 % assert macros
@@ -10,7 +10,7 @@
 -define(ND2,[{name,node2}]).
 -define(ND3,[{name,node3}]).
 
-cfg() ->
+cfg(_TestArgs) ->
 	[
 	 % {global_cfg,["test/nodelist.cfg"]},
 	 {cmd,"-s lager"},

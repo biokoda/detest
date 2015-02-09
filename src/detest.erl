@@ -107,7 +107,7 @@ main(Param) ->
 	{ok, _} = net_kernel:start(['detest@127.0.0.1', longnames]),
 	erlang:set_cookie(node(),'detest'),
 
-	Cfg = apply(Mod,cfg,[]),
+	Cfg = apply(Mod,cfg,[ScriptArg]),
 	GlobCfgs = proplists:get_value(global_cfg,Cfg,[]),
 	NodeCfgs = proplists:get_value(per_node_cfg,Cfg,[]),
 	Nodes1 = proplists:get_value(nodes,Cfg),
