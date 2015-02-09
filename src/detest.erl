@@ -141,7 +141,7 @@ main(Param) ->
 	write_per_node_cfgs(Nodes,NodeCfgs),
 
 	DistNames = [{butil:ds_val(name,Nd),butil:ds_val(distname,Nd)} || Nd <- Nodes],
-	ScriptParam = DistNames++[{path,?PATH},{arg,ScriptArg},{damocles,butil:is_app_running(damocles)}],
+	ScriptParam = DistNames++[{path,?PATH},{args,ScriptArg},{damocles,butil:is_app_running(damocles)}],
 
 	case catch apply(Mod,setup,[ScriptParam]) of
 		{'EXIT',Err0} ->
