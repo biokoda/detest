@@ -227,7 +227,7 @@ start_node(Nd,GlobCmd) ->
 
 	Ebins = string:join([filename:absname(Nm) || Nm <- ["ebin"|filelib:wildcard("deps/*/ebin")]]," "),
 	Cmd = "erl -noshell -noinput -setcookie detest -name "++atom_to_list(butil:ds_val(distname,Nd))++
-			" -pa "++Ebins++" "++AppCmd++VmCmd++RunCmd,
+			" -pa "++Ebins++" "++AppCmd++VmCmd++" "++RunCmd,
 	timer:sleep(300),
 	run(butil:ds_val(distname,Nd),Cmd).
 
