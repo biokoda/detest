@@ -1,12 +1,12 @@
 -module(test).
 % mandatory detest functions
--export([cfg/0,run/3,setup/1,cleanup/1]).
+-export([cfg/0,run/1,setup/1,cleanup/1]).
 % test functions
 -export([call_start/1,call_receive/1]).
 % assert macros
 -include_lib("eunit/include/eunit.hrl").
 
--define(ND1,[{name,node1},{delay,1000}]).
+-define(ND1,[{name,node1}]).
 -define(ND2,[{name,node2}]).
 -define(ND3,[{name,node3}]).
 
@@ -19,17 +19,18 @@ cfg() ->
 	].
 
 
-setup(_Pth) ->
+setup(_Param) ->
 	ok.
 
-cleanup(_Pth) ->
+cleanup(_Param) ->
 	ok.
 
 
-run(Nodes,_Pth,_ScriptParam) ->
+run(Param) ->
+	lager:info("Script params: ~p",[Param]),
 	% Get dist name for RPC.
-	Node1 = proplists:get_value(node1,Nodes),
-	Node2 = proplists:get_value(node2,Nodes),
+	Node1 = proplists:get_value(node1,Param),
+	Node2 = proplists:get_value(node2,Param),
 	{ok,Node2} = rpc:call(Node1,?MODULE,call_start,[Node2]),
 	{ok,Node1} = rpc:call(Node2,?MODULE,call_start,[Node1]),
 

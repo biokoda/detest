@@ -4,7 +4,7 @@
 
 -module(detest_net).
 % script api
--export([toggle_online/2, set_delay/2]).
+-export([toggle_online/2, set_delay/2, find_free_ip/0]).
 % internal call
 -export([start/1]).
 
@@ -26,6 +26,10 @@ set_delay(Nm,Delay) ->
 			Pid ! {set_delay,Delay}
 	end.
 
+find_free_ip() ->
+	{ok,IFL} = inet:getif(),
+	ExistingIps = [IP || {IP,_,_} <- IFL],
+	ip_for_detest({192,168,100,1},ExistingIps).
 
 ip_for_detest({192,168,C,D},L) when C < 255, D == 255 ->
 	ip_for_detest({192,168,C+1,1},L);

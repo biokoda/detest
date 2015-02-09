@@ -1,7 +1,7 @@
 -module(detest).
 -export([main/1,ez/0]).
 % API for test module
--export([add_node/1,add_node/2, stop_node/1]).
+-export([add_node/1,add_node/2, stop_node/1, ip/1]).
 -define(PATH,".detest").
 -define(INF(F,Param),
 	case butil:ds_val(quiet,etscfg) of 
@@ -12,17 +12,9 @@
 	end).
 -define(INF(F),?INF(F,[])).
 
-ez() ->
-	Ebin = filelib:wildcard("ebin/*"),
-	Deps = filelib:wildcard("deps/*/ebin/*"),
-	Files = 
-	[begin
-		{ok,Bin} = file:read_file(Fn),
-		{filename:basename(Fn),Bin}
-	end || Fn <- Ebin++Deps], 
-	%["procket","procket.so"]
-	{ok,{_,Bin}} = zip:create("detest.ez",Files,[memory]),
-	file:write_file("detest.ez",Bin).
+ip(Distname) ->
+	[_,IP] = string:tokens(butil:tolist(Distname),"@"),
+	IP.
 
 add_node(P1) ->
 	add_node(P1,[]).
@@ -83,16 +75,21 @@ main(Param) ->
 			ok
 	end,
 	case script_param(Param) of
-		{ScriptNm,ScriptParam} ->
+		{ScriptNm,ScriptArg} ->
 			ok;
 		_ ->
-			ScriptNm = ScriptParam = undefined,
+			ScriptNm = ScriptArg = undefined,
 			io:format("Invalid params~n"),
 			halt(1)
 	end,
 	[] = os:cmd(epmd_path() ++ " -daemon"),
 	application:ensure_all_started(lager),
-
+	case os:type() of
+		{unix,linux} ->
+			application:start(damocles);
+		_ ->
+			ok
+	end,
 	case compile:file(ScriptNm,[binary,return_errors,{parse_transform, lager_transform}]) of
 		{ok,Mod,Bin} ->
 			ScriptLoad = {Mod,Bin,filename:basename(ScriptNm)},
@@ -102,6 +99,9 @@ main(Param) ->
 			?INF("Unable to compile: ~p",[Err]),
 			halt(1)
 	end,
+	{ok, _} = net_kernel:start(['detest@127.0.0.1', longnames]),
+	erlang:set_cookie(node(),'detest'),
+
 	Cfg = apply(Mod,cfg,[]),
 	GlobCfgs = proplists:get_value(global_cfg,Cfg,[]),
 	NodeCfgs = proplists:get_value(per_node_cfg,Cfg,[]),
@@ -135,10 +135,10 @@ main(Param) ->
 	write_global_cfgs(Nodes,GlobCfgs),
 	write_per_node_cfgs(Nodes,NodeCfgs),
 
-	{ok, _} = net_kernel:start(['detest@127.0.0.1', longnames]),
-	erlang:set_cookie(node(),'detest'),
+	DistNames = [{butil:ds_val(name,Nd),butil:ds_val(distname,Nd)} || Nd <- Nodes],
+	ScriptParam = DistNames++[{path,?PATH},{arg,ScriptArg},{damocles,butil:is_app_running(damocles)}],
 
-	case catch apply(Mod,setup,[?PATH]) of
+	case catch apply(Mod,setup,[ScriptParam]) of
 		{'EXIT',Err0} ->
 			?INF("Setup failed ~p",[Err0]),
 			halt(1);
@@ -150,7 +150,7 @@ main(Param) ->
 	RunPids = [start_node(Nd,Cfg) || Nd <- Nodes],
 	butil:ds_add(runpids,RunPids,etscfg),
 
-	DistNames = [{butil:ds_val(name,Nd),butil:ds_val(distname,Nd)} || Nd <- Nodes],
+	
 	
 	case connect(Nodes) of
 		{error,Node} ->
@@ -161,7 +161,7 @@ main(Param) ->
 				{error,Node} ->
 					?INF("Timeout waiting for app to start on ~p",[Node]);
 				ok ->
-					case catch apply(Mod,run,[DistNames,?PATH,ScriptParam]) of
+					case catch apply(Mod,run,[ScriptParam]) of
 						{'EXIT',Err1} ->
 							?INF("Test failed ~p",[Err1]);
 						_ ->
@@ -169,7 +169,7 @@ main(Param) ->
 					end
 			end
 	end,
-	do_stop(Mod,Cfg).
+	do_stop(Mod,Cfg, ScriptParam).
 
 script_param(["-"++_N|T]) ->
 	script_param(T);
@@ -183,7 +183,7 @@ script_param([N|T]) ->
 script_param([]) ->
 	false.
 
-do_stop(Mod,Cfg) ->
+do_stop(Mod,Cfg,ScriptParam) ->
 	RunPids = butil:ds_val(runpids,etscfg),
 	{StopMod,StopFunc,StopArg} = butil:ds_val(stop,Cfg,{init,stop,[]}),
 	% Nodelist may have changed, read it from ets
@@ -192,11 +192,12 @@ do_stop(Mod,Cfg) ->
 	Pids = [spawn(fun() -> rpc:call(distname(Nd),StopMod,StopFunc,StopArg) end) || Nd <- Nodes],
 	wait_pids(Pids),
 	% [butil:safesend(NetPid,stop) || NetPid <- NetPids],
+	application:stop(damocles),
 	% If nodes still alive, kill them forcefully
 	[RP ! stop || RP <- RunPids],
 	timer:sleep(200),
 	% wait_pids(NetPids),
-	apply(Mod,cleanup,[?PATH]).
+	apply(Mod,cleanup,[ScriptParam]).
 
 start_node(Nd) ->
 	start_node(Nd,butil:ds_val(cmd,etscfg,"")).
@@ -205,7 +206,6 @@ start_node(Nd,[{_,_}|_] = GlobCfg) ->
 start_node(Nd,GlobCmd) ->
 	AppPth = lists:flatten([?PATH,"/",ndnm(Nd),"/etc/app.config"]),
 	RunCmd = butil:ds_val(cmd,Nd,GlobCmd),
-	io:format("Glob cmd ~p, runcmd ~p~n",[GlobCmd,RunCmd]),
 	case filelib:is_regular(AppPth) of
 		true ->
 			AppCmd = " -config "++filename:absname(AppPth);
@@ -372,12 +372,21 @@ ndnm(N) ->
 distname([{_,_}|_] = N) ->
 	distname(proplists:get_value(name,N,""));
 distname(N) ->
-	case os:type() of
-		% {unix,linux} ->
-		% 	N;
-		{_,_} ->
-			[Nm|_] = string:tokens(butil:tolist(N),"@"),
-			list_to_atom(Nm++"@127.0.0.1")
+	case butil:ds_val(N,etscfg) of
+		undefined ->
+			HaveDamocles = butil:is_app_running(damocles),
+			case os:type() of
+				{unix,linux} when HaveDamocles ->
+					IP = butil:to_ip(detest_net:find_free_ip()),
+					damocles:add_interface(IP),
+				 	Nm = list_to_atom(butil:tolist(N)++"@"++IP);
+				_ ->
+					Nm = list_to_atom(hd(string:tokens(butil:tolist(N),"@"))++"@127.0.0.1")
+			end,
+			butil:ds_add(N,Nm,etscfg),
+			Nm;
+		Nm ->
+			Nm
 	end.
 
 % ndaddr([{_,_}|_] = N) ->
@@ -426,3 +435,15 @@ epmd_path() ->
     Epmd ->
       Epmd
   end.
+
+ez() ->
+	Ebin = filelib:wildcard("ebin/*"),
+	Deps = filelib:wildcard("deps/*/ebin/*"),
+	Files = 
+	[begin
+		{ok,Bin} = file:read_file(Fn),
+		{filename:basename(Fn),Bin}
+	end || Fn <- Ebin++Deps], 
+	%["procket","procket.so"]
+	{ok,{_,Bin}} = zip:create("detest.ez",Files,[memory]),
+	file:write_file("detest.ez",Bin).
