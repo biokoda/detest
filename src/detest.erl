@@ -27,7 +27,7 @@ add_node(P1,NewCfg) ->
 	butil:ds_add(per_node_cfg,NodeCfgs,etscfg),
 	% add node to nodes
 	P = [{distname, DistName}|P1],
-	% node might already be in cfg (if it was added, stopped then started again)
+	% node might already be in cfg
 	case butil:findobj(distname,DistName,butil:ds_val(nodes,etscfg)) of
 		false ->
 			Nodes = [P|butil:ds_val(nodes,etscfg)],
@@ -245,7 +245,7 @@ write_global_cfgs(Nodes,GlobCfgs) ->
 	 end || Nd <- Nodes].
 
 write_per_node_cfgs() ->
-	write_global_cfgs(butil:ds_val(nodes,etscfg),butil:ds_val(per_node_cfg,etscfg)).
+	write_per_node_cfgs(butil:ds_val(nodes,etscfg),butil:ds_val(per_node_cfg,etscfg)).
 write_per_node_cfgs(Nodes,NodeCfgs) ->
 	[begin
 		[begin
