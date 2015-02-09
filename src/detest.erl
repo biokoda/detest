@@ -86,7 +86,12 @@ main(Param) ->
 	application:ensure_all_started(lager),
 	case os:type() of
 		{unix,linux} ->
-			application:start(damocles);
+			case os:cmd("sudo whoami") of
+				"root"++_ ->
+					application:start(damocles);
+				_ ->
+					ok
+			end;
 		_ ->
 			ok
 	end,
