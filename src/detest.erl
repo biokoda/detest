@@ -33,7 +33,7 @@ add_node(P1,NewCfg) ->
 			Nodes = [P|butil:ds_val(nodes,etscfg)],
 			butil:ds_add(nodes,Nodes,etscfg);
 		_ ->
-			Nodes = butil:ds_val(nodes,etscfg)
+			butil:ds_val(nodes,etscfg)
 	end,
 
 	write_global_cfgs(),
@@ -42,8 +42,9 @@ add_node(P1,NewCfg) ->
 	Pid = start_node(P),
 	RunPids = butil:ds_val(runpids,etscfg),
 	butil:ds_add(runpids,[Pid|RunPids],etscfg),
-	ok = connect(Nodes),
-	ok = wait_app(Nodes,butil:ds_val(wait_for,etscfg),butil:ds_val(scriptload,etscfg)),
+
+	ok = connect([P]),
+	ok = wait_app([P],butil:ds_val(wait_for,etscfg),butil:ds_val(scriptload,etscfg)),
 	DistName.
 
 stop_node([_|_] = Nd) ->
@@ -154,27 +155,56 @@ main(Param) ->
 	% spawn nodes
 	RunPids = [start_node(Nd,Cfg) || Nd <- Nodes],
 	butil:ds_add(runpids,RunPids,etscfg),
-
-	
-	
+		
 	case connect(Nodes) of
 		{error,Node} ->
+			Pid1 = Pid2 = undefined,
 			?INF("Unable to connect to ~p",[Node]);
 		ok ->
 			timer:sleep(500),
 			case wait_app(Nodes,butil:ds_val(wait_for,Cfg),ScriptLoad) of
 				{error,Node} ->
+					Pid1 = Pid2 = undefined,
 					?INF("Timeout waiting for app to start on ~p",[Node]);
 				ok ->
-					case catch apply(Mod,run,[ScriptParam]) of
-						{'EXIT',Err1} ->
-							?INF("Test failed ~p",[Err1]);
-						_ ->
-							?INF("Test finished.")
-					end
+					{Pid1,_} = spawn_monitor(fun() -> runproc(Mod,ScriptParam) end),
+					{Pid2,_} = spawn_monitor(fun() -> stdinproc() end)
 			end
 	end,
+	wait_done(Pid1,Pid2),
 	do_stop(Mod,Cfg, ScriptParam).
+
+wait_done(Pid1,Pid2) ->
+	case is_pid(Pid1) andalso is_pid(Pid2) of
+		true ->
+			receive
+				% no matter which process exits, kill both
+				{'DOWN',_Ref,_,Pid,_} when Pid == Pid1; Pid == Pid2 ->
+					exit(Pid1,stop),
+					exit(Pid2,stop)
+			end;
+		false ->
+			ok
+	end.
+
+stdinproc() ->
+	case io:get_line("Enter q to quit test: ") of
+		"q"++_ ->
+			ok;
+		"Q"++_ ->
+			ok;
+		_A ->
+			stdinproc()
+	end.
+
+runproc(Mod,ScriptParam) ->
+	register(runproc,self()),
+	case catch apply(Mod,run,[ScriptParam]) of
+		{'EXIT',Err1} ->
+			?INF("Test failed ~p",[Err1]);
+		_ ->
+			?INF("Test finished.")
+	end.
 
 script_param(["-"++_N|T]) ->
 	script_param(T);
