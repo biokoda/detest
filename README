@@ -20,4 +20,6 @@ You can also send arguments to your script:
 
 If you are on linux and willing to run detest as sudo, it will use damocles library to create seperate network interfaces for every node that you have configured. You can then call damocles library directly and create various network condition like packetloss, delays or network splits between nodes.
 
-For an example look at test/test.erl
+detest will create a folder named .detest at location it is running from. This is where node logs and state should go. 
+
+For an example look at: test/test.erl and test/app.config

@@ -14,7 +14,6 @@
 cfg(_TestArgs) ->
 	% KV = [{Param1,Val1}],
 	[
-	 
 	 %%  global_cfg is a list of config files for your nodes. They are template files (erlydtl).
 	 %%  When rendering, they get nodes value as a parameter + whatever you add here.
 	 % {global_cfg,[{"test/nodes.yaml",[{fixedvals,KV}]},"test/withoutparams.yaml"]},
@@ -22,7 +21,7 @@ cfg(_TestArgs) ->
 	 %%  Config files per node. For every node, its property list is added when rendering.
 	 %%  if name contains app.config or vm.args it gets automatically added to run node command
 	 %%  do not set cookie or name of node in vm.args this is set by detest
-	 % {per_node_cfg,["test/app.config"]},
+	 {per_node_cfg,["test/app.config"]},
 	 
 	 %%  cmd is appended to erl execute command, it should execute your app.
 	 %%  It can be set for every node individually. Add it to that list if you need it, it will override this value.
