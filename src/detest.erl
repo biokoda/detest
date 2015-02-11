@@ -109,9 +109,9 @@ main(Param) ->
 	erlang:set_cookie(node(),'detest'),
 
 	Cfg = apply(Mod,cfg,[ScriptArg]),
-	GlobCfgs = proplists:get_value(global_cfg,Cfg,[]),
-	NodeCfgs = proplists:get_value(per_node_cfg,Cfg,[]),
-	Nodes1 = proplists:get_value(nodes,Cfg),
+	GlobCfgs = butil:ds_val(global_cfg,Cfg,[]),
+	NodeCfgs = butil:ds_val(per_node_cfg,Cfg,[]),
+	Nodes1 = butil:ds_val(nodes,Cfg),
 	Nodes = [[{distname,distname(Nd)}|Nd] || Nd <- Nodes1],
 
 	butil:ds_add(global_cfg,GlobCfgs,etscfg),
@@ -120,6 +120,10 @@ main(Param) ->
 	butil:ds_add(cmd,butil:ds_val(cmd,Cfg,""),etscfg),
 	butil:ds_add(wait_for,butil:ds_val(wait_for,Cfg),etscfg),
 	butil:ds_add(scriptload,ScriptLoad,etscfg),
+	butil:ds_add(erlcmd,butil:ds_val(erlcmd,GlobCfgs,"erl"),etscfg),
+	butil:ds_add(erlenv,butil:ds_val(erlenv,GlobCfgs,[]),etscfg),
+	butil:ds_add(connect_timeout,butil:ds_val(connect_timeout,Cfg,10000),etscfg),
+	butil:ds_add(app_wait_timeout,butil:ds_val(app_wait_timeout,Cfg,30000),etscfg),
 
 	os:cmd("rm -rf "++?PATH),
 
@@ -224,7 +228,7 @@ do_stop(Mod,Cfg,ScriptParam) ->
 	% Nodelist may have changed, read it from ets
 	Nodes = butil:ds_val(nodes,etscfg),
 	timer:sleep(800),
-	Pids = [spawn(fun() -> rpc:call(distname(Nd),StopMod,StopFunc,StopArg) end) || Nd <- Nodes],
+	Pids = [spawn(fun() -> rpc:call(distname(Nd),StopMod,StopFunc,StopArg,10000) end) || Nd <- Nodes],
 	wait_pids(Pids),
 	% [butil:safesend(NetPid,stop) || NetPid <- NetPids],
 	application:stop(damocles),
@@ -235,10 +239,10 @@ do_stop(Mod,Cfg,ScriptParam) ->
 	apply(Mod,cleanup,[ScriptParam]).
 
 start_node(Nd) ->
-	start_node(Nd,butil:ds_val(cmd,etscfg,"")).
-start_node(Nd,[{_,_}|_] = GlobCfg) ->
-	start_node(Nd,butil:ds_val(cmd,GlobCfg,""));
-start_node(Nd,GlobCmd) ->
+	start_node(Nd,etscfg).
+start_node(Nd,GlobCfg) ->
+	start_node(Nd,butil:ds_val(cmd,GlobCfg,""),butil:ds_val(erlcmd,GlobCfg,"erl"),butil:ds_val(erlenv,GlobCfg,[])).
+start_node(Nd,GlobCmd,ErlCmd,ErlEnv) ->
 	AppPth = lists:flatten([?PATH,"/",ndnm(Nd),"/etc/app.config"]),
 	RunCmd = butil:ds_val(cmd,Nd,GlobCmd),
 	case filelib:is_regular(AppPth) of
@@ -256,10 +260,10 @@ start_node(Nd,GlobCmd) ->
 	end,
 
 	Ebins = string:join([filename:absname(Nm) || Nm <- ["ebin"|filelib:wildcard("deps/*/ebin")]]," "),
-	Cmd = "erl -noshell -noinput -setcookie detest -name "++atom_to_list(butil:ds_val(distname,Nd))++
+	Cmd = ErlCmd++" -noshell -noinput -setcookie detest -name "++atom_to_list(butil:ds_val(distname,Nd))++
 			" -pa "++Ebins++" "++AppCmd++VmCmd++" "++RunCmd,
 	timer:sleep(300),
-	run(butil:ds_val(distname,Nd),Cmd).
+	run(butil:ds_val(distname,Nd),Cmd,ErlEnv).
 
 write_global_cfgs() ->
 	write_global_cfgs(butil:ds_val(nodes,etscfg),butil:ds_val(global_cfg,etscfg)).
@@ -287,10 +291,10 @@ write_per_node_cfgs(Nodes,NodeCfgs) ->
 	end || Nd <- Nodes].
 
 wait_app(L,App,ScriptLoad) ->
-	wait_app(L,App,ScriptLoad,os:timestamp()).
-wait_app([H|T],App,ScriptLoad,Started) ->
+	wait_app(L,App,ScriptLoad,os:timestamp(),butil:ds_val(app_wait_timeout,etscfg)).
+wait_app([H|T],App,ScriptLoad,Started,Timeout) ->
 	Node = butil:ds_val(distname,H),
-	case timer:now_diff(os:timestamp(),Started) > 30*1000000 of
+	case timer:now_diff(os:timestamp(),Started) > Timeout*1000 of
 		true ->
 			{error,H};
 		_ ->
@@ -299,25 +303,25 @@ wait_app([H|T],App,ScriptLoad,Started) ->
 					case App == undefined orelse lists:keymember(App,1,L) of
 						true ->
 							load_modules(Node,ScriptLoad),
-							wait_app(T,App,ScriptLoad,Started);
+							wait_app(T,App,ScriptLoad,Started,Timeout);
 						false ->
-							wait_app([H|T],App,ScriptLoad,Started)
+							wait_app([H|T],App,ScriptLoad,Started,Timeout)
 					end;
 				_ ->
-					wait_app([H|T],App,ScriptLoad,Started)
+					wait_app([H|T],App,ScriptLoad,Started,Timeout)
 			end
 	end;
-wait_app([],_,_,_) ->
+wait_app([],_,_,_,_) ->
 	ok.
 
-run(Name,[_|_] = Cmd) when is_atom(Name) ->
+run(Name,[_|_] = Cmd,ErlEnv) when is_atom(Name) ->
 	?INF("Running ~s",[Cmd]),
 	spawn(fun() ->
 		register(Name,self()),
-		Port = open_port({spawn,Cmd},[exit_status,use_stdio,binary,stream]),
+		Port = open_port({spawn,Cmd},[exit_status,use_stdio,binary,stream,{env,ErlEnv}]),
 		{os_pid,OsPid} = erlang:port_info(Port,os_pid),
 		run(Port,OsPid)
-	end);
+	end).
 run(Port,OsPid) ->
 	receive
 		{Port,{exit_status,_Status}} ->
@@ -348,9 +352,9 @@ wait_pids([]) ->
 	ok.
 
 connect(L) ->
-	connect(L,os:timestamp()).
-connect([H|T],Start) ->
-	case timer:now_diff(os:timestamp(),Start) > 10000000 of
+	connect(L,os:timestamp(),butil:ds_val(connect_timeout,etscfg)).
+connect([H|T],Start,Timeout) ->
+	case timer:now_diff(os:timestamp(),Start) > Timeout*1000 of
 		true ->
 			{error,H};
 		_ ->
@@ -361,16 +365,16 @@ connect([H|T],Start) ->
 					case net_adm:ping(Node) of
 		        		pang ->
 		        			timer:sleep(100),
-							connect([H|T],Start);
+							connect([H|T],Start,Timeout);
 						pong ->
-							connect(T,os:timestamp())
+							connect(T,os:timestamp(),Timeout)
 					end;
 				false ->
 					timer:sleep(100),
-					connect([H|T],Start)
+					connect([H|T],Start,Timeout)
 			end
 	end;
-connect([],_) ->
+connect([],_,_) ->
 	ok.
 
 % Every node also has test and this module loaded
