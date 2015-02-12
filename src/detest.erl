@@ -242,9 +242,11 @@ start_node(Nd) ->
 	start_node(Nd,etscfg).
 start_node(Nd,GlobCfg) ->
 	start_node(Nd,butil:ds_val(cmd,GlobCfg,""),butil:ds_val(erlcmd,GlobCfg,"erl"),butil:ds_val(erlenv,GlobCfg,[])).
-start_node(Nd,GlobCmd,ErlCmd,ErlEnv) ->
+start_node(Nd,GlobCmd,ErlCmd1,ErlEnv1) ->
 	AppPth = lists:flatten([?PATH,"/",ndnm(Nd),"/etc/app.config"]),
 	RunCmd = butil:ds_val(cmd,Nd,GlobCmd),
+	ErlCmd = butil:ds_val(erlcmd,Nd,ErlCmd1),
+	ErlEnv = butil:ds_val(erlenv,Nd,ErlEnv1),
 	case filelib:is_regular(AppPth) of
 		true ->
 			AppCmd = " -config "++filename:absname(AppPth);
