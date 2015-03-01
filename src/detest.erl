@@ -71,6 +71,7 @@ main(Param) ->
 	butil:ds_add(quiet,lists:member("-q",Param),etscfg),
 	butil:ds_add(stopby,halt,etscfg),
 	butil:ds_add(basepath,?PATH,etscfg),
+	butil:ds_add(dostdin,true,etscfg),
 	case script_param(Param) of
 		{ScriptNm,ScriptArg} ->
 			ok;
@@ -232,13 +233,18 @@ prompt_continue() ->
 	end.
 
 stdinproc() ->
-	case io:get_line("Enter q to quit test: ") of
-		"q"++_ ->
-			ok;
-		"Q"++_ ->
-			ok;
-		_A ->
-			stdinproc()
+	case butil:ds_val(dostdin,etscfg) of
+		true ->
+			case io:get_line("Enter q to quit test: ") of
+				"q"++_ ->
+					ok;
+				"Q"++_ ->
+					ok;
+				_A ->
+					stdinproc()
+			end;
+		_ ->
+			timer:sleep(infinity)
 	end.
 
 runproc(Mod,ScriptParam) ->
