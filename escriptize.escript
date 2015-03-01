@@ -1,13 +1,24 @@
 #!/usr/bin/env escript
 
-main(BinFiles) ->
+
+main(BinFiles1) ->
+  BinFiles = ["deps/bkdcore/ebin/butil.beam"] ++ BinFiles1,
+  Apps = [erlydtl,lager,merl,goldrush,eunit_formatters,damocles],
+
   %% Add ebin paths to our path
   true = code:add_path("ebin"),
   ok = code:add_paths(filelib:wildcard("deps/*/ebin")),
   
   %% Read the contents of the files in ebin(s)
-  Files1 = lists:flatmap(fun(Dir) -> load_files(Dir) end, ["ebin"|filelib:wildcard("deps/*/ebin")]),
-  Files = [{Fn,element(2,file:read_file(Fn))} || Fn <- BinFiles]++Files1,
+  Files1 = [begin
+    [{Nm,element(2,file:read_file(Nm))} || Nm <- filelib:wildcard("deps/"++atom_to_list(Dir)++"/ebin/*.beam")]
+  end || Dir <- Apps],
+  % Files1 = lists:flatmap(fun(Dir) -> load_files(Dir) end, ["ebin"|AppBeamNames]),
+  Files = [{Fn,element(2,file:read_file(Fn))} || Fn <- BinFiles]++lists:flatten(Files1),
+
+  % [begin
+  %   io:format("A, ~p~n",[A])
+  % end || {A,B} <- Files, is_binary(B) == true],
   
   case zip:create("mem", Files, [memory]) of
     {ok, {"mem", ZipBin}} ->
@@ -32,10 +43,3 @@ main(BinFiles) ->
     _ ->
       ok
   end.
-
-load_files(Dir) ->
-  [read_file(Filename, Dir) || Filename <- filelib:wildcard("*", Dir)].
-
-read_file(Filename, Dir) ->
-  {ok, Bin} = file:read_file(filename:join(Dir, Filename)),
-  {Filename, Bin}.

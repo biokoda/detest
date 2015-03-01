@@ -1,7 +1,7 @@
 all:
 	./rebar get-deps
 	./rebar compile
-	./rebar escriptize
+	./escriptize.escript
 
 clean:
 	./rebar clean
