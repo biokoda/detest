@@ -310,7 +310,7 @@ start_node(Nd,GlobCmd,ErlCmd1,ErlEnv1) ->
 
 	%Ebins = [filename:absname(Nm) || Nm <- ["ebin"|filelib:wildcard("deps/*/ebin")]]," "),
 	Ebins = string:join(["ebin"|filelib:wildcard("deps/*/ebin")]," "),
-	Cmd = ErlCmd++" -noshell -noinput -setcookie detest -name "++atom_to_list(butil:ds_val(distname,Nd))++
+	Cmd = ErlCmd++" -noshell -noinput -setcookie "++butil:tolist(erlang:get_cookie())++" -name "++atom_to_list(butil:ds_val(distname,Nd))++
 			" -pa "++Ebins++" "++AppCmd++VmCmd++" "++RunCmd,
 	case butil:ds_val(extrun,Nd) of
 		true ->
