@@ -1,5 +1,7 @@
 -module(detest).
--export([main/1,ez/0]).
+% run for running detest embedded. dist erlang must be running.
+% main for running detest as escript.
+-export([main/1,run/1,run/2,run/3,ez/0]).
 % API for test module
 -export([add_node/1,add_node/2, stop_node/1, ip/1]).
 -define(PATH,".detest").
@@ -53,6 +55,8 @@ stop_node(Nm) when is_atom(Nm) ->
 	Nm ! stop,
 	wait_pids([whereis(Nm)]).
 
+
+
 main([]) ->
 	io:format("Command: ./detest <options> yourscript.erl <script_params>~n"++
 		"Options:~n"
@@ -63,18 +67,10 @@ main(["-h"]) ->
 	main([]);
 main(Param) ->
 	ets:new(etscfg, [named_table,public,set,{read_concurrency,true}]),
-	case lists:member("-v",Param) of
-		true ->
-			butil:ds_add(verbose,true,etscfg);
-		_ ->
-			ok
-	end,
-	case lists:member("-q",Param) of
-		true ->
-			butil:ds_add(quiet,true,etscfg);
-		_ ->
-			ok
-	end,
+	butil:ds_add(verbose,lists:member("-v",Param),etscfg),
+	butil:ds_add(quiet,lists:member("-q",Param),etscfg),
+	butil:ds_add(stopby,halt,etscfg),
+	butil:ds_add(basepath,?PATH,etscfg),
 	case script_param(Param) of
 		{ScriptNm,ScriptArg} ->
 			ok;
@@ -108,6 +104,40 @@ main(Param) ->
 	{ok, _} = net_kernel:start(['detest@127.0.0.1', longnames]),
 	erlang:set_cookie(node(),'detest'),
 
+	run(Mod,ScriptArg,ScriptLoad).
+
+stop(Reason) ->
+	case butil:ds_val(stopby,etscfg) of
+		halt ->
+			halt(1);
+		_ ->
+			throw(Reason)
+	end.
+
+% Run will execute until Mod:run concludes and erlang nodes have stopped.
+% Mod - test module atom
+% ScriptArg - list of script arguments
+% Opts - [{basepath,".detest"},{verbose,true},{quiet,true},..]
+run(Mod) ->
+	run(Mod,[]).
+run(Mod,ScriptArg) ->
+	run(Mod,ScriptArg, []).
+run(Mod,ScriptArg,[{_,_}|_] = Opts) ->
+	case ets:info(etscfg,size) of
+		undefined ->
+			ets:new(etscfg, [named_table,public,set,{read_concurrency,true}]);
+		_ ->
+			ets:delete_all_objects(etscfg)
+	end,
+	[butil:ds_add(K,V,etscfg) || {K,V} <- Opts],
+	case  butil:ds_val(basepath,etscfg) of
+		undefined ->
+			butil:ds_add(basepath,?PATH,etscfg);
+		_ ->
+			ok
+	end,
+	run(Mod,ScriptArg,code:get_object_code(Mod));
+run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 	Cfg = apply(Mod,cfg,[ScriptArg]),
 	GlobCfgs = butil:ds_val(global_cfg,Cfg,[]),
 	NodeCfgs = butil:ds_val(per_node_cfg,Cfg,[]),
@@ -125,7 +155,7 @@ main(Param) ->
 	butil:ds_add(connect_timeout,butil:ds_val(connect_timeout,Cfg,10000),etscfg),
 	butil:ds_add(app_wait_timeout,butil:ds_val(app_wait_timeout,Cfg,30000),etscfg),
 
-	os:cmd("rm -rf "++?PATH),
+	os:cmd("rm -rf "++butil:ds_val(basepath,etscfg)),
 
 	% case detest_net:start([{butil:ip_to_tuple(ndaddr(Nd)),
 	% 						proplists:get_value(delay,Nd,{0,0}),
@@ -146,12 +176,12 @@ main(Param) ->
 	write_per_node_cfgs(Nodes,NodeCfgs),
 
 	DistNames = [{butil:ds_val(name,Nd),butil:ds_val(distname,Nd)} || Nd <- Nodes],
-	ScriptParam = DistNames++[{path,?PATH},{args,ScriptArg},{damocles,butil:is_app_running(damocles)}],
+	ScriptParam = DistNames++[{path,butil:ds_val(basepath,etscfg)},{args,ScriptArg},{damocles,butil:is_app_running(damocles)}],
 
 	case catch apply(Mod,setup,[ScriptParam]) of
 		{'EXIT',Err0} ->
 			?INF("Setup failed ~p",[Err0]),
-			halt(1);
+			stop({error,setup,Err0});
 		_ ->
 			ok
 	end,
@@ -236,14 +266,15 @@ do_stop(Mod,Cfg,ScriptParam) ->
 	[RP ! stop || RP <- RunPids],
 	timer:sleep(200),
 	% wait_pids(NetPids),
-	apply(Mod,cleanup,[ScriptParam]).
+	apply(Mod,cleanup,[ScriptParam]),
+	ok.
 
 start_node(Nd) ->
 	start_node(Nd,etscfg).
 start_node(Nd,GlobCfg) ->
 	start_node(Nd,butil:ds_val(cmd,GlobCfg,""),butil:ds_val(erlcmd,GlobCfg,"erl"),butil:ds_val(erlenv,GlobCfg,[])).
 start_node(Nd,GlobCmd,ErlCmd1,ErlEnv1) ->
-	AppPth = lists:flatten([?PATH,"/",ndnm(Nd),"/etc/app.config"]),
+	AppPth = lists:flatten([butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/app.config"]),
 	RunCmd = butil:ds_val(cmd,Nd,GlobCmd),
 	ErlCmd = butil:ds_val(erlcmd,Nd,ErlCmd1),
 	ErlEnv = butil:ds_val(erlenv,Nd,ErlEnv1),
@@ -253,7 +284,7 @@ start_node(Nd,GlobCmd,ErlCmd1,ErlEnv1) ->
 		false ->
 			AppCmd = ""
 	end,
-	VmArgs = lists:flatten([?PATH,"/",ndnm(Nd),"/etc/vm.args"]),
+	VmArgs = lists:flatten([butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/vm.args"]),
 	case filelib:is_regular(VmArgs) of
 		true ->
 			VmCmd = " -args_file "++filename:absname(VmArgs);
@@ -262,19 +293,19 @@ start_node(Nd,GlobCmd,ErlCmd1,ErlEnv1) ->
 	end,
 
 	Ebins = string:join([filename:absname(Nm) || Nm <- ["ebin"|filelib:wildcard("deps/*/ebin")]]," "),
-	Cmd = ErlCmd++" -noshell -noinput -setcookie detest -name "++atom_to_list(butil:ds_val(distname,Nd))++
+	Cmd = ErlCmd++" -noshell -noinput -setcookie "++butil:tolist(erlang:get_cookie())++" -name "++atom_to_list(butil:ds_val(distname,Nd))++
 			" -pa "++Ebins++" "++AppCmd++VmCmd++" "++RunCmd,
 	timer:sleep(300),
-	run(butil:ds_val(distname,Nd),Cmd,ErlEnv).
+	runerl(butil:ds_val(distname,Nd),Cmd,ErlEnv).
 
 write_global_cfgs() ->
 	write_global_cfgs(butil:ds_val(nodes,etscfg),butil:ds_val(global_cfg,etscfg)).
 write_global_cfgs(Nodes,GlobCfgs) ->
 	[begin
-		filelib:ensure_dir([?PATH,"/",ndnm(Nd),"/etc"]),
+		filelib:ensure_dir([butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc"]),
 		[begin
 			FBin = render_cfg(G,[{nodes,Nodes}]),
-			Nm = [?PATH,"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(G))],
+			Nm = [butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(G))],
 			filelib:ensure_dir(Nm),
 			ok = file:write_file(Nm,FBin)
 		end || G <- GlobCfgs]
@@ -286,7 +317,7 @@ write_per_node_cfgs(Nodes,NodeCfgs) ->
 	[begin
 		[begin
 			FBin = render_cfg(NC,Nd),
-			Nm = [?PATH,"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(NC))],
+			Nm = [butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(NC))],
 			filelib:ensure_dir(Nm),
 			ok = file:write_file(Nm,FBin)
 		end || NC <- NodeCfgs]
@@ -316,15 +347,15 @@ wait_app([H|T],App,ScriptLoad,Started,Timeout) ->
 wait_app([],_,_,_,_) ->
 	ok.
 
-run(Name,[_|_] = Cmd,ErlEnv) when is_atom(Name) ->
+runerl(Name,[_|_] = Cmd,ErlEnv) when is_atom(Name) ->
 	?INF("Running ~s",[Cmd]),
 	spawn(fun() ->
 		register(Name,self()),
 		Port = open_port({spawn,Cmd},[exit_status,use_stdio,binary,stream,{env,ErlEnv}]),
 		{os_pid,OsPid} = erlang:port_info(Port,os_pid),
-		run(Port,OsPid)
+		runerl(Port,OsPid)
 	end).
-run(Port,OsPid) ->
+runerl(Port,OsPid) ->
 	receive
 		{Port,{exit_status,_Status}} ->
 			ok;
@@ -335,7 +366,7 @@ run(Port,OsPid) ->
 				_ ->
 					ok
 			end,
-			run(Port,OsPid);
+			runerl(Port,OsPid);
 		stop ->
 			os:cmd("kill "++integer_to_list(OsPid))
 	end.
@@ -392,12 +423,12 @@ render_cfg(Cfg,P) ->
 		FN ->
 			Param = []
 	end,
-	case apply(modnm(FN),render,[[{basepath,?PATH}|P]++Param]) of
+	case apply(modnm(FN),render,[[{basepath,butil:ds_val(basepath,etscfg)}|P]++Param]) of
 		{ok,Bin} ->
 			Bin;
 		Err ->
 			?INF("Error rendering ~p~nParam:~p~nError:~p",[FN,P,Err]),
-			halt(1)
+			stop({error,cfg_render,FN,Err})
 	end.
 
 modnm(FN) ->
@@ -456,7 +487,7 @@ compile_cfgs(L) ->
 				ok;
 			Err ->
 				?INF("Error compiling ~p~n~p",[dtlnm(Cfg),Err]),
-				halt(1)
+				stop({error,compile,Cfg,Err})
 		end
 	end || Cfg <- L].
 
@@ -469,7 +500,7 @@ epmd_path() ->
       case os:find_executable(Name) of
         false ->
           ?INF("Could not find epmd.~n"),
-          halt(1);
+          stop({error,noepmd});
         GlobalEpmd ->
           GlobalEpmd
       end;
