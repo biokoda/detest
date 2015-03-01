@@ -1,10 +1,12 @@
 Detest is a tool for running distributed erlang tests. It is designed to be simple and flexible. It sets up a distributed environment of multiple nodes, then it calls your code to do whatever you wish with that environment.
 
+Detest should be executed from the root folder of your project. 
+
+You can run all or some nodes with valgrind/gdb.
+
 As a parameter it takes in path to your test script. This script needs to export at least: cfg/1, run/1, setup/1, cleanup/1.
 
-Detest is configured with your cfg/1 function within the script. It instructs detest how many nodes to run, where their configuration files are, how to execute your app, etc.
-
-Detest will then execute the nodes, connect to each (as a hidden node) wait for your app to start, then call run/1 function in your script. You are then free to do whatever you wish. RPC is possible to any of the nodes. You can also terminate the test at any time by entering q to terminal.
+Detest is configured with your cfg/1 function within the script. It instructs detest how many nodes to run, where their configuration files are, how to execute your app, etc.Detest will then execute the nodes, connect to each (as a hidden node) wait for your app to start, then call run/1 function in your script. You are then free to do whatever you wish. RPC is possible to any of the nodes. You can also terminate the test at any time by entering q to terminal.
 
 Run it like so:
     

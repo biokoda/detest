@@ -46,7 +46,7 @@ cfg(_TestArgs) ->
 	 % {erlenv,[{"VALGRIND_MISC_FLAGS","-v --leak-check=full --tool=memcheck --track-origins=yes  "++
      %                                "--suppressions=../otp/erts/emulator/valgrind/suppress.standard --show-possibly-lost=no"}]},
      
-     %%  in ms, how long to wait to connect to node. If running with valgrind it takes a while. (def. is 10000)
+     %%  in ms, how long to wait to connect to node. If running with valgrind it can take a while. (def. is 10000)
      % {connect_timeout,60000},
      
      %%  in ms, how long to wait for application start once node is started (def. is 30000)

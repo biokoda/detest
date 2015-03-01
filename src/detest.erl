@@ -221,6 +221,16 @@ wait_done(Pid1,Pid2) ->
 			ok
 	end.
 
+prompt_continue() ->
+	case io:get_line("Enter c to continue: ") of
+		"c"++_ ->
+			ok;
+		"C"++_ ->
+			ok;
+		_A ->
+			prompt_continue()
+	end.
+
 stdinproc() ->
 	case io:get_line("Enter q to quit test: ") of
 		"q"++_ ->
@@ -292,11 +302,19 @@ start_node(Nd,GlobCmd,ErlCmd1,ErlEnv1) ->
 			VmCmd = ""
 	end,
 
-	Ebins = string:join([filename:absname(Nm) || Nm <- ["ebin"|filelib:wildcard("deps/*/ebin")]]," "),
-	Cmd = ErlCmd++" -noshell -noinput -setcookie "++butil:tolist(erlang:get_cookie())++" -name "++atom_to_list(butil:ds_val(distname,Nd))++
+	%Ebins = [filename:absname(Nm) || Nm <- ["ebin"|filelib:wildcard("deps/*/ebin")]]," "),
+	Ebins = string:join(["ebin"|filelib:wildcard("deps/*/ebin")]," "),
+	Cmd = ErlCmd++" -noshell -noinput -setcookie detest -name "++atom_to_list(butil:ds_val(distname,Nd))++
 			" -pa "++Ebins++" "++AppCmd++VmCmd++" "++RunCmd,
-	timer:sleep(300),
-	runerl(butil:ds_val(distname,Nd),Cmd,ErlEnv).
+	case butil:ds_val(extrun,Nd) of
+		true ->
+			?INF("extrun set for node. Run it manually now. Command detest would use (in current folder): ~n~p",[Cmd]),
+			prompt_continue(),
+			runerl(butil:ds_val(distname,Nd),undefined,[]);
+		_ ->
+			timer:sleep(300),
+			runerl(butil:ds_val(distname,Nd),Cmd,ErlEnv)
+	end.
 
 write_global_cfgs() ->
 	write_global_cfgs(butil:ds_val(nodes,etscfg),butil:ds_val(global_cfg,etscfg)).
@@ -347,12 +365,19 @@ wait_app([H|T],App,ScriptLoad,Started,Timeout) ->
 wait_app([],_,_,_,_) ->
 	ok.
 
-runerl(Name,[_|_] = Cmd,ErlEnv) when is_atom(Name) ->
+
+runerl(Name,Cmd,ErlEnv) when is_atom(Name) ->
 	?INF("Running ~s",[Cmd]),
 	spawn(fun() ->
 		register(Name,self()),
-		Port = open_port({spawn,Cmd},[exit_status,use_stdio,binary,stream,{env,ErlEnv}]),
-		{os_pid,OsPid} = erlang:port_info(Port,os_pid),
+		case Cmd of
+			[_|_] ->
+				Port = open_port({spawn,Cmd},[exit_status,use_stdio,binary,stream,{env,ErlEnv}]),
+				{os_pid,OsPid} = erlang:port_info(Port,os_pid);
+			_ ->
+				Port = undefined,
+				OsPid = undefined
+		end,
 		runerl(Port,OsPid)
 	end).
 runerl(Port,OsPid) ->
@@ -367,8 +392,10 @@ runerl(Port,OsPid) ->
 					ok
 			end,
 			runerl(Port,OsPid);
+		stop when is_integer(OsPid) ->
+			os:cmd("kill "++integer_to_list(OsPid));
 		stop ->
-			os:cmd("kill "++integer_to_list(OsPid))
+			ok
 	end.
 
 wait_pids([undefined|T]) ->
