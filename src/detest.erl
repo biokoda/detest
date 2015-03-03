@@ -46,7 +46,7 @@ add_node(P1,NewCfg) ->
 	butil:ds_add(runpids,[Pid|RunPids],etscfg),
 
 	ok = connect([P]),
-	ok = wait_app([P],butil:ds_val(wait_for,etscfg),butil:ds_val(scriptload,etscfg)),
+	ok = wait_app([P],butil:ds_val(wait_for_app,etscfg),butil:ds_val(scriptload,etscfg)),
 	DistName.
 
 stop_node([_|_] = Nd) ->
@@ -149,7 +149,7 @@ run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 	butil:ds_add(per_node_cfg,NodeCfgs,etscfg),
 	butil:ds_add(nodes,Nodes,etscfg),
 	butil:ds_add(cmd,butil:ds_val(cmd,Cfg,""),etscfg),
-	butil:ds_add(wait_for,butil:ds_val(wait_for,Cfg),etscfg),
+	butil:ds_add(wait_for_app,butil:ds_val(wait_for_app,Cfg),etscfg),
 	butil:ds_add(scriptload,ScriptLoad,etscfg),
 	butil:ds_add(erlcmd,butil:ds_val(erlcmd,GlobCfgs,"erl"),etscfg),
 	butil:ds_add(erlenv,butil:ds_val(erlenv,GlobCfgs,[]),etscfg),
@@ -197,7 +197,7 @@ run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 			?INF("Unable to connect to ~p",[Node]);
 		ok ->
 			timer:sleep(500),
-			case wait_app(Nodes,butil:ds_val(wait_for,Cfg),ScriptLoad) of
+			case wait_app(Nodes,butil:ds_val(wait_for_app,Cfg),ScriptLoad) of
 				{error,Node} ->
 					Pid1 = Pid2 = undefined,
 					?INF("Timeout waiting for app to start on ~p",[Node]);
