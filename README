@@ -1,6 +1,6 @@
 Detest is a tool for running distributed erlang tests. It is designed to be simple and flexible. It sets up a distributed environment of multiple nodes, then it calls your code to do whatever you wish with that environment.
 
-Detest should be executed from the root folder of your project. 
+Detest should be executed from the root folder of your project.
 
 You can run all or some nodes with valgrind/gdb.
 

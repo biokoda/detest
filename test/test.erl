@@ -25,8 +25,9 @@ cfg(_TestArgs) ->
 	 
 	 %%  cmd is appended to erl execute command, it should execute your app.
 	 %%  It can be set for every node individually. Add it to that list if you need it, it will override this value.
-	 %%  You should just start your app with this command and not do anything else. Leave other code for run call.
-	 {cmd,"-s lager"},
+	 %%  You should just start your app with this command and set start flags. Leave other code for run call.
+	 %%  We add +S 2 and +A 2 to keep test node small.
+	 {cmd,"-s lager +S 2 +A 2"},
 
 	 %%  which app to wait for to consider node started
 	 {wait_for_app,lager},
