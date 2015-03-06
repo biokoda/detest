@@ -62,10 +62,18 @@ main([]) ->
 		"Options:~n"
 		"-h    print help~n"++
 		"-v    print stdout from nodes~n"++
-		"-q    quiet~n");
+		"-q    quiet~n"++
+		"-ez   create ez package from beams in project (if your tests need external libraries)~n");
 main(["-h"]) ->
 	main([]);
 main(Param) ->
+	case lists:member("-ez",Param) of
+		true ->
+			ez(filename:basename(filename:dirname(filename:absname(escript:script_name())))),
+			halt(1);
+		false ->
+			ok
+	end,
 	ets:new(etscfg, [named_table,public,set,{read_concurrency,true}]),
 	butil:ds_add(verbose,lists:member("-v",Param),etscfg),
 	butil:ds_add(quiet,lists:member("-q",Param),etscfg),
@@ -542,6 +550,8 @@ epmd_path() ->
   end.
 
 ez() ->
+	ez("detest").
+ez(Name) ->
 	Ebin = filelib:wildcard("ebin/*"),
 	Deps = filelib:wildcard("deps/*/ebin/*"),
 	Files = 
@@ -550,5 +560,5 @@ ez() ->
 		{filename:basename(Fn),Bin}
 	end || Fn <- Ebin++Deps], 
 	%["procket","procket.so"]
-	{ok,{_,Bin}} = zip:create("detest.ez",Files,[memory]),
-	file:write_file("detest.ez",Bin).
+	{ok,{_,Bin}} = zip:create(Name++".ez",Files,[memory]),
+	file:write_file(Name++".ez",Bin).
