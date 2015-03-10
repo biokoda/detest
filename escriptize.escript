@@ -11,9 +11,10 @@ main(BinFiles1) ->
   
   %% Read the contents of the files in ebin(s)
   Files1 = [begin
-    [{filename:basename(Nm),element(2,file:read_file(Nm))} || Nm <- filelib:wildcard("deps/"++atom_to_list(Dir)++"/ebin/*.beam") ++ filelib:wildcard("ebin/*.beam")]
+    FileList = filelib:wildcard("deps/"++atom_to_list(Dir)++"/ebin/*.*") ++ filelib:wildcard("ebin/*.*"),
+    [{filename:basename(Nm),element(2,file:read_file(Nm))} || Nm <- FileList]
   end || Dir <- Apps],
-  % Files1 = lists:flatmap(fun(Dir) -> load_files(Dir) end, ["ebin"|AppBeamNames]),
+
   Files = [{filename:basename(Fn),element(2,file:read_file(Fn))} || Fn <- BinFiles]++lists:flatten(Files1),
   
   case zip:create("mem", Files, [memory]) of

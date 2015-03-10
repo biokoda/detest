@@ -94,7 +94,7 @@ main(Param) ->
 		{unix,linux} ->
 			case os:cmd("sudo whoami") of
 				"root"++_ ->
-					application:start(damocles);
+					application:ensure_all_started(damocles);
 				_ ->
 					ok
 			end;
