@@ -1,4 +1,6 @@
-Detest is a tool for running distributed erlang tests. It is designed to be simple and flexible. It sets up a distributed environment of multiple nodes, then it calls your code to do whatever you wish with that environment.
+Detest is a tool for running distributed erlang tests and it also works very well as a generic library/tool for running erlang VMs. 
+
+It is designed to be simple and flexible. It sets up a distributed environment of multiple nodes, then it calls your code to do whatever you wish with that environment.
 
 Detest is an escript and should be executed from the root folder of your project (like rebar).
 
