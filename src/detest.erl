@@ -3,7 +3,7 @@
 % main for running detest as escript.
 -export([main/1,run/1,run/2,run/3,ez/0]).
 % API for test module
--export([add_node/1,add_node/2, stop_node/1, ip/1]).
+-export([add_node/1,add_node/2, stop_node/1, ip/1, cmd/2]).
 -define(PATH,".detest").
 -define(INF(F,Param),
 	case butil:ds_val(quiet,etscfg) of 
@@ -17,6 +17,29 @@
 ip(Distname) ->
 	[_,IP] = string:tokens(butil:tolist(Distname),"@"),
 	IP.
+
+% Execute command on host where Node is running at.
+% Useful for nodes connected over ssh, otherwise just os:cmd/1
+cmd(Node,Cmd) ->
+	case lists:keyfind(ssh,1,Node) of
+		false ->
+			os:cmd(Cmd);
+		{ssh,Host,SshPort,_Cwd,Opts} ->
+			{ok,SshCon} = ssh:connect(Host,SshPort,[{silently_accept_hosts,true}|Opts]),
+			{ok,SshChan} = ssh_connection:session_channel(SshCon,5000),
+			ssh_connection:exec(SshCon, SshChan,Cmd, infinity),
+			Rec = receive_ssh_resp([]),
+			ssh:close(SshCon),
+			Rec
+	end.
+
+receive_ssh_resp(L) ->
+	receive
+		{ssh_cm,_,{data,_,_,Bin}} ->
+			receive_ssh_resp([Bin|L]);
+		{ssh_cm,_,{closed,_}} ->
+			iolist_to_binary(lists:reverse(L))
+	end.
 
 add_node(P1) ->
 	add_node(P1,[]).
