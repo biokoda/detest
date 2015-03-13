@@ -6,9 +6,15 @@
 % assert macros
 -include_lib("eunit/include/eunit.hrl").
 
--define(ND1,[{name,node1}]).
--define(ND2,[{name,node2}]).
--define(ND3,[{name,node3}]).
+% Nodes will be started with dist name: name@127.0.0.1
+-define(ND1,[{name,node1}]). % node1@127.0.0.1
+-define(ND2,[{name,node2}]). % node2@127.0.0.1
+-define(ND3,[{name,node3}]). % node3@127.0.0.1
+
+%% Example for running nodes over ssh.  Add option: {ssh,NodeHostName,SshPort,Cwd,SshOpts}
+%-define(ND1,[{name,node1},{ssh,"node1",22,"/opt/detest",[{user,"root"}]}]).
+%-define(ND2,[{name,node2},{ssh,"node2",22,"/opt/detest",[{user,"root"}]}]).
+%-define(ND3,[{name,node3},{ssh,"node3",22,"/opt/detest",[{user,"root"}]}]).
 
 
 cfg(_TestArgs) ->
@@ -22,6 +28,10 @@ cfg(_TestArgs) ->
 	 %%  if name contains app.config or vm.args it gets automatically added to run node command
 	 %%  do not set cookie or name of node in vm.args this is set by detest
 	 {per_node_cfg,["test/app.config"]},
+
+	 %%  Detest node address is by default detest@127.0.0.1
+	 %%  If running nodes over ssh you need to set a valid non loopback address
+	 %{detest_name,'detest@home'},
 	 
 	 %%  cmd is appended to erl execute command, it should execute your app.
 	 %%  It can be set for every node individually. Add it to that list if you need it, it will override this value.

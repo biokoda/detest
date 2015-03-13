@@ -90,17 +90,7 @@ main(Param) ->
 	end,
 	[] = os:cmd(epmd_path() ++ " -daemon"),
 	application:ensure_all_started(lager),
-	case os:type() of
-		{unix,linux} ->
-			case os:cmd("sudo whoami") of
-				"root"++_ ->
-					application:ensure_all_started(damocles);
-				_ ->
-					ok
-			end;
-		_ ->
-			ok
-	end,
+	
 	case compile:file(ScriptNm,[binary,return_errors,{parse_transform, lager_transform}]) of
 		{ok,Mod,Bin} ->
 			ScriptLoad = {Mod,Bin,filename:basename(ScriptNm)},
@@ -110,8 +100,6 @@ main(Param) ->
 			?INF("Unable to compile: ~p",[Err]),
 			halt(1)
 	end,
-	{ok, _} = net_kernel:start(['detest@127.0.0.1', longnames]),
-	erlang:set_cookie(node(),'detest'),
 
 	run(Mod,ScriptArg,ScriptLoad).
 
@@ -152,6 +140,37 @@ run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 	NodeCfgs = butil:ds_val(per_node_cfg,Cfg,[]),
 	Nodes1 = butil:ds_val(nodes,Cfg),
 	Nodes = [[{distname,distname(Nd)}|Nd] || Nd <- Nodes1],
+
+	case node() of
+		'nonode@nohost' ->
+			DetestDist = butil:ds_val(detest_name,Cfg,'detest@127.0.0.1'),
+			[_,DistHost] = string:tokens(butil:tolist(DetestDist),"@"),
+			case string:tokens(DistHost,".") of
+				[_] ->
+					{ok, _} = net_kernel:start([DetestDist, shortnames]);
+				_ ->
+					{ok, _} = net_kernel:start([DetestDist, longnames])
+			end;
+		_ ->
+			ok
+	end,
+
+	case [lists:keyfind(ssh,1,Nd) || Nd <- Nodes, lists:keyfind(ssh,1,Nd) /= false] of
+		[] ->
+			case os:type() of
+				{unix,linux} ->
+					case os:cmd("sudo whoami") of
+						"root"++_ ->
+							application:ensure_all_started(damocles);
+						_ ->
+							ok
+					end;
+				_ ->
+					ok
+			end;
+		[_|_] ->
+			ssh:start()
+	end,
 
 	butil:ds_add(global_cfg,GlobCfgs,etscfg),
 	butil:ds_add(per_node_cfg,NodeCfgs,etscfg),
@@ -304,30 +323,37 @@ start_node(Nd,GlobCmd,ErlCmd1,ErlEnv1) ->
 	ErlEnv = butil:ds_val(erlenv,Nd,ErlEnv1),
 	case filelib:is_regular(AppPth) of
 		true ->
-			AppCmd = " -config "++filename:absname(AppPth);
+			AppCmd = " -config "++AppPth;
 		false ->
 			AppCmd = ""
 	end,
 	VmArgs = lists:flatten([butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/vm.args"]),
 	case filelib:is_regular(VmArgs) of
 		true ->
-			VmCmd = " -args_file "++filename:absname(VmArgs);
+			VmCmd = " -args_file "++VmArgs;
 		false ->
 			VmCmd = ""
 	end,
 
 	%Ebins = [filename:absname(Nm) || Nm <- ["ebin"|filelib:wildcard("deps/*/ebin")]]," "),
 	Ebins = string:join(["ebin"|filelib:wildcard("deps/*/ebin")]," "),
-	Cmd = ErlCmd++" -noshell -noinput -setcookie "++butil:tolist(erlang:get_cookie())++" -name "++atom_to_list(butil:ds_val(distname,Nd))++
+	Dist = atom_to_list(butil:ds_val(distname,Nd)),
+	case string:tokens(Dist,".") of
+		[_] ->
+			NameStr = " -sname ";
+		_ ->
+			NameStr = " -name "
+	end,
+	Cmd = ErlCmd++" -noshell -noinput -setcookie "++butil:tolist(erlang:get_cookie())++NameStr++Dist++
 			" -pa "++Ebins++" "++AppCmd++VmCmd++" "++RunCmd,
 	case butil:ds_val(extrun,Nd) of
 		true ->
 			?INF("extrun set for node. Run it manually now. Command detest would use (in current folder): ~n~p",[Cmd]),
 			prompt_continue(),
-			runerl(butil:ds_val(distname,Nd),undefined,[]);
+			runerl(Nd,butil:ds_val(distname,Nd),undefined,[]);
 		_ ->
 			timer:sleep(300),
-			runerl(butil:ds_val(distname,Nd),Cmd,ErlEnv)
+			runerl(Nd,butil:ds_val(distname,Nd),Cmd,ErlEnv)
 	end.
 
 write_global_cfgs() ->
@@ -335,8 +361,9 @@ write_global_cfgs() ->
 write_global_cfgs(Nodes,GlobCfgs) ->
 	[begin
 		filelib:ensure_dir([butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc"]),
+		filelib:ensure_dir([butil:ds_val(basepath,etscfg),"/log"]),
 		[begin
-			FBin = render_cfg(G,[{nodes,Nodes}]),
+			FBin = render_cfg(G,[{basepath,butil:ds_val(basepath,etscfg)},{nodes,Nodes}]),
 			Nm = [butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(G))],
 			filelib:ensure_dir(Nm),
 			ok = file:write_file(Nm,FBin)
@@ -348,7 +375,13 @@ write_per_node_cfgs() ->
 write_per_node_cfgs(Nodes,NodeCfgs) ->
 	[begin
 		[begin
-			FBin = render_cfg(NC,Nd),
+			case lists:keyfind(ssh,1,Nd) of
+				false ->
+					BasePth = {basepath,butil:ds_val(basepath,etscfg)};
+				{ssh,_,_,BasePth1,_} ->
+					BasePth = {basepath,BasePth1++"/"++butil:ds_val(basepath,etscfg)}
+			end,
+			FBin = render_cfg(NC,[BasePth|Nd]),
 			Nm = [butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(NC))],
 			filelib:ensure_dir(Nm),
 			ok = file:write_file(Nm,FBin)
@@ -380,14 +413,22 @@ wait_app([],_,_,_,_) ->
 	ok.
 
 
-runerl(Name,Cmd,ErlEnv) when is_atom(Name) ->
+runerl(Nd,Name,Cmd,ErlEnv) when is_atom(Name) ->
 	?INF("Running ~s",[Cmd]),
+	SshInfo = lists:keyfind(ssh,1,Nd),
 	spawn(fun() ->
 		register(Name,self()),
 		case Cmd of
-			[_|_] ->
+			[_|_] when SshInfo == false ->
 				Port = open_port({spawn,Cmd},[exit_status,use_stdio,binary,stream,{env,ErlEnv}]),
 				{os_pid,OsPid} = erlang:port_info(Port,os_pid);
+			[_|_] ->
+				{ssh,Host,SshPort,Cwd,Opts} = SshInfo,
+				{ok,SshCon} = ssh:connect(Host,SshPort,[{silently_accept_hosts,true}|Opts]),
+				{ok,SshChan} = ssh_connection:session_channel(SshCon,5000),
+				ssh_connection:exec(SshCon, SshChan, "cd "++Cwd++" && "++Cmd, infinity),
+				Port = SshCon,
+				OsPid = undefined;
 			_ ->
 				Port = undefined,
 				OsPid = undefined
@@ -399,6 +440,14 @@ runerl(Port,OsPid) ->
 		{Port,{exit_status,_Status}} ->
 			ok;
 		{Port,{data,Bin}} ->
+			case butil:ds_val(verbose,etscfg) of
+				true ->
+					io:format("~s",[Bin]);
+				_ ->
+					ok
+			end,
+			runerl(Port,OsPid);
+		{ssh_cm,Port,{data,_,_,Bin}} ->
 			case butil:ds_val(verbose,etscfg) of
 				true ->
 					io:format("~s",[Bin]);
@@ -464,7 +513,7 @@ render_cfg(Cfg,P) ->
 		FN ->
 			Param = []
 	end,
-	case apply(modnm(FN),render,[[{basepath,butil:ds_val(basepath,etscfg)}|P]++Param]) of
+	case apply(modnm(FN),render,[P++Param]) of
 		{ok,Bin} ->
 			Bin;
 		Err ->
@@ -482,8 +531,15 @@ ndnm(N) ->
 	[NS1|_] = string:tokens(NS,"@"),
 	NS1.
 
-distname([{_,_}|_] = N) ->
-	distname(proplists:get_value(name,N,""));
+distname([{_,_}|_] = Nd) ->
+	Name = butil:ds_val(name,Nd),
+	true = Name /= undefined,
+	case lists:keyfind(ssh,1,Nd) of
+		{ssh,Host,_Port,_Cwd,_Opts} ->
+			butil:toatom(butil:tolist(Name)++"@"++butil:tolist(Host));
+		_ ->
+			distname(butil:ds_val(name,Nd,""))
+	end;
 distname(N) ->
 	case butil:ds_val(N,etscfg) of
 		undefined ->
