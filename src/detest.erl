@@ -206,6 +206,16 @@ run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 	butil:ds_add(connect_timeout,butil:ds_val(connect_timeout,Cfg,10000),etscfg),
 	butil:ds_add(app_wait_timeout,butil:ds_val(app_wait_timeout,Cfg,30000),etscfg),
 
+	[begin
+		case lists:keyfind(ssh,1,Nd) of
+			false ->
+				ok;
+			{ssh,_,_,BasePth1,_} ->
+				%?INF("Cleanup ~p",["rm -rf "++BasePth1++"/"++butil:ds_val(basepath,etscfg)]),
+				cmd(Nd,"rm -rf "++BasePth1++"/"++butil:ds_val(basepath,etscfg))
+		end
+	end || Nd <- Nodes],
+
 	os:cmd("rm -rf "++butil:ds_val(basepath,etscfg)),
 
 	% case detest_net:start([{butil:ip_to_tuple(ndaddr(Nd)),
@@ -237,6 +247,8 @@ run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 			ok
 	end,
 	
+	os:cmd("chmod -R a+rw "++butil:ds_val(basepath,etscfg)),
+
 	% spawn nodes
 	RunPids = [start_node(Nd,Cfg) || Nd <- Nodes],
 	butil:ds_add(runpids,RunPids,etscfg),
