@@ -6,7 +6,7 @@
 -export([add_node/1,add_node/2, stop_node/1, ip/1, cmd/2]).
 -define(PATH,".detest").
 -define(INF(F,Param),
-	case butil:ds_val(quiet,etscfg) of 
+	case butil:ds_val(quiet,etscfg) of
 	true ->
 		ok;
 	_ ->
@@ -113,7 +113,7 @@ main(Param) ->
 	end,
 	[] = os:cmd(epmd_path() ++ " -daemon"),
 	application:ensure_all_started(lager),
-	
+
 	case compile:file(ScriptNm,[binary,return_errors,{parse_transform, lager_transform}]) of
 		{ok,Mod,Bin} ->
 			ScriptLoad = {Mod,Bin,filename:basename(ScriptNm)},
@@ -229,7 +229,7 @@ run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 	% 		ok
 	% end,
 	% NetPids = [],
-	
+
 	compile_cfgs(GlobCfgs++NodeCfgs),
 
 	% create files in etc
@@ -246,13 +246,13 @@ run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 		_ ->
 			ok
 	end,
-	
+
 	os:cmd("chmod -R a+rw "++butil:ds_val(basepath,etscfg)),
 
 	% spawn nodes
 	RunPids = [start_node(Nd,Cfg) || Nd <- Nodes],
 	butil:ds_add(runpids,RunPids,etscfg),
-		
+
 	case connect(Nodes) of
 		{error,Node} ->
 			Pid1 = Pid2 = undefined,
@@ -399,7 +399,7 @@ write_global_cfgs(Nodes,GlobCfgs) ->
 		filelib:ensure_dir([butil:ds_val(basepath,etscfg),"/log"]),
 		[begin
 			FBin = render_cfg(G,[{basepath,butil:ds_val(basepath,etscfg)},{nodes,Nodes}]),
-			Nm = [butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(G))],
+			Nm = [butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/",filename:basename(dtlendnm(G))],
 			filelib:ensure_dir(Nm),
 			ok = file:write_file(Nm,FBin)
 		end || G <- GlobCfgs]
@@ -417,7 +417,7 @@ write_per_node_cfgs(Nodes,NodeCfgs) ->
 					BasePth = {basepath,BasePth1++"/"++butil:ds_val(basepath,etscfg)}
 			end,
 			FBin = render_cfg(NC,[BasePth|Nd]),
-			Nm = [butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/",filename:basename(dtlnm(NC))],
+			Nm = [butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/",filename:basename(dtlendnm(NC))],
 			filelib:ensure_dir(Nm),
 			ok = file:write_file(Nm,FBin)
 		end || NC <- NodeCfgs]
@@ -543,6 +543,8 @@ load_modules(Node,{Mod,Bin,Filename}) ->
 
 render_cfg(Cfg,P) ->
 	case Cfg of
+		{{FN,_},Param} ->
+			ok;
 		{FN,Param} ->
 			ok;
 		FN ->
@@ -600,8 +602,20 @@ distname(N) ->
 % 	[_,Addr] = string:tokens(NS,"@"),
 % 	Addr.
 
+dtlendnm(G) ->
+	case G of
+		{{_,GNm},_} ->
+			GNm;
+		{GNm,_} ->
+			GNm;
+		GNm ->
+			GNm
+	end.
+
 dtlnm(G) ->
 	case G of
+		{{GNm,_},_} ->
+			GNm;
 		{GNm,_} ->
 			GNm;
 		GNm ->
@@ -645,11 +659,11 @@ ez() ->
 ez(Name) ->
 	Ebin = filelib:wildcard("ebin/*"),
 	Deps = filelib:wildcard("deps/*/ebin/*"),
-	Files = 
+	Files =
 	[begin
 		{ok,Bin} = file:read_file(Fn),
 		{filename:basename(Fn),Bin}
-	end || Fn <- Ebin++Deps], 
+	end || Fn <- Ebin++Deps],
 	%["procket","procket.so"]
 	{ok,{_,Bin}} = zip:create(Name++".ez",Files,[memory]),
 	file:write_file(Name++".ez",Bin).
