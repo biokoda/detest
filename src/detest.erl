@@ -3,7 +3,7 @@
 % main for running detest as escript.
 -export([main/1,run/1,run/2,run/3,ez/0]).
 % API for test module
--export([add_node/1,add_node/2, stop_node/1, ip/1, cmd/2]).
+-export([add_node/1,add_node/2, stop_node/1, ip/1, cmd/2, isolate/2,isolate_end/1]).
 -define(PATH,".detest").
 -define(INF(F,Param),
 	case butil:ds_val(quiet,etscfg) of
@@ -17,6 +17,29 @@
 ip(Distname) ->
 	[_,IP] = string:tokens(butil:tolist(Distname),"@"),
 	IP.
+
+% Isolate node or nodes on Id
+% All nodes with this Id will see each other. 
+isolate(Nodes,Id) when is_list(Nodes) ->
+	[begin
+		rpc:call(Nd,erlang,set_cookie,[Nd,butil:toatom(Id)]),
+		erlang:set_cookie(Nd,butil:toatom(Id)),
+		HisNodes = rpc:call(Nd,erlang,nodes,[]),
+		[rpc:call(Nd,erlang,disconnect_node,[HN]) || HN <- HisNodes],
+		pong = net_adm:ping(Nd)
+	end || Nd <- Nodes];
+isolate(Node,Id) ->
+	isolate([Node],Id).
+
+% Back to default
+isolate_end(Nodes) when is_list(Nodes) ->
+	[begin 
+		rpc:call(Nd,erlang,set_cookie,[Nd,erlang:get_cookie()]),
+		erlang:set_cookie(Nd,erlang:get_cookie()),
+		pong = net_adm:ping(Nd)
+	end || Nd <- Nodes];
+isolate_end(N) ->
+	isolate_end([N]).
 
 % Execute command on host where Node is running at.
 % Useful for nodes connected over ssh, otherwise just os:cmd/1
@@ -180,17 +203,19 @@ run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 
 	case [lists:keyfind(ssh,1,Nd) || Nd <- Nodes, lists:keyfind(ssh,1,Nd) /= false] of
 		[] ->
-			case os:type() of
-				{unix,linux} ->
-					case os:cmd("sudo whoami") of
-						"root"++_ ->
-							application:ensure_all_started(damocles);
-						_ ->
-							ok
-					end;
-				_ ->
-					ok
-			end;
+			% case os:type() of
+			% 	{unix,linux} ->
+			% 		% case os:cmd("sudo whoami") of
+			% 		% 	"root"++_ ->
+			% 		% 		application:ensure_all_started(damocles);
+			% 		% 	_ ->
+			% 		% 		ok
+			% 		% end;
+			% 		ok;
+			% 	_ ->
+			% 		ok
+			% end;
+			ok;
 		[_|_] ->
 			ssh:start()
 	end,
@@ -237,7 +262,8 @@ run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 	write_per_node_cfgs(Nodes,NodeCfgs),
 
 	DistNames = [{butil:ds_val(name,Nd),butil:ds_val(distname,Nd)} || Nd <- Nodes],
-	ScriptParam = DistNames++[{path,butil:ds_val(basepath,etscfg)},{args,ScriptArg},{damocles,butil:is_app_running(damocles)}],
+	ScriptParam = DistNames++[{path,butil:ds_val(basepath,etscfg)},{args,ScriptArg}],
+	%{damocles,butil:is_app_running(damocles)}
 
 	case catch apply(Mod,setup,[ScriptParam]) of
 		{'EXIT',Err0} ->
@@ -639,20 +665,20 @@ compile_cfgs(L) ->
 
 
 epmd_path() ->
-  ErtsBinDir = filename:dirname(element(2,file:get_cwd())),
-  Name = "epmd",
-  case os:find_executable(Name, ErtsBinDir) of
-    false ->
-      case os:find_executable(Name) of
-        false ->
-          ?INF("Could not find epmd.~n"),
-          stop({error,noepmd});
-        GlobalEpmd ->
-          GlobalEpmd
-      end;
-    Epmd ->
-      Epmd
-  end.
+	ErtsBinDir = filename:dirname(element(2,file:get_cwd())),
+	Name = "epmd",
+	case os:find_executable(Name, ErtsBinDir) of
+		false ->
+			case os:find_executable(Name) of
+				false ->
+					?INF("Could not find epmd.~n"),
+					stop({error,noepmd});
+				GlobalEpmd ->
+					GlobalEpmd
+			end;
+		Epmd ->
+			Epmd
+	end.
 
 ez() ->
 	ez("detest").

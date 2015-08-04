@@ -55,13 +55,13 @@ cfg(_TestArgs) ->
 	 
 	 %%  optional environment variables for erlang (def. is [])
 	 % {erlenv,[{"VALGRIND_MISC_FLAGS","-v --leak-check=full --tool=memcheck --track-origins=yes  "++
-     %                                "--suppressions=../otp/erts/emulator/valgrind/suppress.standard --show-possibly-lost=no"}]},
-     
-     %%  in ms, how long to wait to connect to node. If running with valgrind it can take a while. (def. is 10000)
-     % {connect_timeout,60000},
-     
-     %%  in ms, how long to wait for application start once node is started (def. is 30000)
-     % {app_wait_timeout,60000*5}
+	 %                                "--suppressions=../otp/erts/emulator/valgrind/suppress.standard --show-possibly-lost=no"}]},
+	 
+	 %%  in ms, how long to wait to connect to node. If running with valgrind it can take a while. (def. is 10000)
+	 % {connect_timeout,60000},
+	 
+	 %%  in ms, how long to wait for application start once node is started (def. is 30000)
+	 % {app_wait_timeout,60000*5}
 	].
 
 
@@ -77,18 +77,44 @@ run(Param) ->
 	% Get full dist name for RPC.
 	Node1 = proplists:get_value(node1,Param),
 	Node2 = proplists:get_value(node2,Param),
-	{ok,Node2} = rpc:call(Node1,?MODULE,call_start,[Node2]),
-	{ok,Node1} = rpc:call(Node2,?MODULE,call_start,[Node1]),
+	{ok,Node2} = rpc:call(Node1,?MODULE,call_start,[Node2],200),
+	{ok,Node1} = rpc:call(Node2,?MODULE,call_start,[Node1],200),
 
 	Node3 = detest:add_node(?ND3),
-	{ok,Node1} = rpc:call(Node3,?MODULE,call_start,[Node1]),
+	{ok,Node1} = rpc:call(Node3,?MODULE,call_start,[Node1],200),
+
+	% Place node2 in nd2_isolation group
+	detest:isolate(Node2,nd2_isolation),
+	% Calling from node2 to node1 or node3 fails
+	{badrpc,_} = rpc:call(Node2,?MODULE,call_start,[Node1],200),
+	{badrpc,_} = rpc:call(Node2,?MODULE,call_start,[Node3],200),
+	% node3 and node1 are still connected
+	{ok,Node1} = rpc:call(Node3,?MODULE,call_start,[Node1],200),
+	% We are still connected to node2
+	pong = net_adm:ping(Node2),
+
+	% add node3 to node2 group. Now node1 is alone.
+	detest:isolate(Node3,nd2_isolation),
+	{badrpc,_} = rpc:call(Node1,?MODULE,call_start,[Node2],200),
+	{badrpc,_} = rpc:call(Node1,?MODULE,call_start,[Node3],200),
+	% node2 and node3 are still connected
+	{ok,Node2} = rpc:call(Node3,?MODULE,call_start,[Node2],200),
+	% We are still connected to node1
+	pong = net_adm:ping(Node1),
+
+	% Back to normal
+	detest:isolate_end([Node3,Node2]),
+	{ok,Node2} = rpc:call(Node1,?MODULE,call_start,[Node2],200),
+	{ok,Node3} = rpc:call(Node1,?MODULE,call_start,[Node3],200),
+	{ok,Node2} = rpc:call(Node3,?MODULE,call_start,[Node2],200),
+
 	ok.
 
 
 % This module is loaded inside every executed node. So we can rpc to these functions on every node.
 call_start(Nd) ->
 	lager:info("Calling from=~p to=~p, at=~p~n",[node(), Nd, time()]),
-	rpc:call(Nd,?MODULE,call_receive,[node()]).
+	rpc:call(Nd,?MODULE,call_receive,[node()],200).
 
 call_receive(From) ->
 	lager:info("Received call on=~p from=~p, at=~p~n",[node(), From, time()]),
