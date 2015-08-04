@@ -34,7 +34,7 @@ Detest supports:
 
 * embedded mode within an app
 * executing nodes over SSH
-* damocles library to create a seperate network interface for every node (SSH to LXC containers works better)
+* network split simulation without using containers/virtualization
 * executing some or all nodes with GDB/valgrind
 * manually executing some nodes (if you want to debug one of them)
 * django template files as configs
