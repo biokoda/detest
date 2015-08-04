@@ -45,9 +45,14 @@ isolate_end(Nodes) when is_list(Nodes) ->
 		rpc:call(Nd,erlang,set_cookie,[Nd,erlang:get_cookie()]),
 		erlang:set_cookie(Nd,erlang:get_cookie()),
 		pong = net_adm:ping(Nd),
-		Cons = rpc:call(Nd,ranch_server,get_connections_sup,[bkdcore_in]),
-		L = rpc:call(Nd,supervisor,which_children,[Cons]),
-		[rpc:call(Nd,bkdcore_rpc,isolate,[Pid,false]) || {bkdcore_rpc,Pid,worker,[bkdcore_rpc]} <- L]
+		case rpc:call(Nd,erlang,whereis,[bkdcore_sup]) of
+			undefined ->
+				ok;
+			_ ->
+				Cons = rpc:call(Nd,ranch_server,get_connections_sup,[bkdcore_in]),
+				L = rpc:call(Nd,supervisor,which_children,[Cons]),
+				[rpc:call(Nd,bkdcore_rpc,isolate,[Pid,false]) || {bkdcore_rpc,Pid,worker,[bkdcore_rpc]} <- L]
+		end
 	end || Nd <- Nodes];
 isolate_end(N) ->
 	isolate_end([N]).
