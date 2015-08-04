@@ -26,7 +26,15 @@ isolate(Nodes,Id) when is_list(Nodes) ->
 		erlang:set_cookie(Nd,butil:toatom(Id)),
 		HisNodes = rpc:call(Nd,erlang,nodes,[]),
 		[rpc:call(Nd,erlang,disconnect_node,[HN]) || HN <- HisNodes],
-		pong = net_adm:ping(Nd)
+		pong = net_adm:ping(Nd),
+		case rpc:call(Nd,erlang,whereis,[bkdcore_sup]) of
+			undefined ->
+				ok;
+			_ ->
+				Cons = rpc:call(Nd,ranch_server,get_connections_sup,[bkdcore_in]),
+				L = rpc:call(Nd,supervisor,which_children,[Cons]),
+				[rpc:call(Nd,bkdcore_rpc,isolate,[Pid,true]) || {bkdcore_rpc,Pid,worker,[bkdcore_rpc]} <- L]
+		end
 	end || Nd <- Nodes];
 isolate(Node,Id) ->
 	isolate([Node],Id).
@@ -36,7 +44,10 @@ isolate_end(Nodes) when is_list(Nodes) ->
 	[begin 
 		rpc:call(Nd,erlang,set_cookie,[Nd,erlang:get_cookie()]),
 		erlang:set_cookie(Nd,erlang:get_cookie()),
-		pong = net_adm:ping(Nd)
+		pong = net_adm:ping(Nd),
+		Cons = rpc:call(Nd,ranch_server,get_connections_sup,[bkdcore_in]),
+		L = rpc:call(Nd,supervisor,which_children,[Cons]),
+		[rpc:call(Nd,bkdcore_rpc,isolate,[Pid,false]) || {bkdcore_rpc,Pid,worker,[bkdcore_rpc]} <- L]
 	end || Nd <- Nodes];
 isolate_end(N) ->
 	isolate_end([N]).
