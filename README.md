@@ -26,6 +26,8 @@ You can also send arguments to your script:
 
 Detest also supports executing nodes over ssh. So if you want to test network conditions, use LXC and configure detest to SSH to containers and execute nodes in them.
 
+You can also simulate network partitions the easy way, using detest:isolate/2 and detest:isolate_end/1. This will simulate network splits by changing erlang cookies.
+
 detest will create a folder named .detest at location it is running from. This is where node logs and state should go. 
 
 Detest supports:
