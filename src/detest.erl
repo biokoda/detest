@@ -31,9 +31,7 @@ isolate(Nodes,Id) when is_list(Nodes) ->
 			undefined ->
 				ok;
 			_ ->
-				Cons = rpc:call(Nd,ranch_server,get_connections_sup,[bkdcore_in]),
-				L = rpc:call(Nd,supervisor,which_children,[Cons]),
-				[rpc:call(Nd,bkdcore_rpc,isolate,[Pid,true]) || {bkdcore_rpc,Pid,worker,[bkdcore_rpc]} <- L]
+				rpc:call(Nd,bkdcore_rpc,isolate,[true])
 		end
 	end || Nd <- Nodes];
 isolate(Node,Id) ->
@@ -49,9 +47,10 @@ isolate_end(Nodes) when is_list(Nodes) ->
 			undefined ->
 				ok;
 			_ ->
-				Cons = rpc:call(Nd,ranch_server,get_connections_sup,[bkdcore_in]),
-				L = rpc:call(Nd,supervisor,which_children,[Cons]),
-				[rpc:call(Nd,bkdcore_rpc,isolate,[Pid,false]) || {bkdcore_rpc,Pid,worker,[bkdcore_rpc]} <- L]
+				% Cons = rpc:call(Nd,ranch_server,get_connections_sup,[bkdcore_in]),
+				% L = rpc:call(Nd,supervisor,which_children,[Cons]),
+				% [rpc:call(Nd,bkdcore_rpc,isolate,[Pid,false]) || {bkdcore_rpc,Pid,worker,[bkdcore_rpc]} <- L]
+				rpc:call(Nd,bkdcore_rpc,isolate,[false])
 		end
 	end || Nd <- Nodes];
 isolate_end(N) ->
