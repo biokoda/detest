@@ -32,7 +32,9 @@ isolate(Nodes,Id) when is_list(Nodes) ->
 				ok;
 			_ ->
 				rpc:call(Nd,bkdcore_rpc,isolate,[true])
-		end
+		end,
+		NodeInfo = butil:findobj(distname,Nd,butil:ds_val(nodes,etscfg)),
+		[rpc:call(butil:ds_val(distname,Nd1), bkdcore_rpc, isolate_from,[butil:tobin(butil:ds_val(name,NodeInfo)),true]) || Nd1 <- butil:ds_val(nodes,etscfg)]
 	end || Nd <- Nodes];
 isolate(Node,Id) ->
 	isolate([Node],Id).
@@ -51,7 +53,9 @@ isolate_end(Nodes) when is_list(Nodes) ->
 				% L = rpc:call(Nd,supervisor,which_children,[Cons]),
 				% [rpc:call(Nd,bkdcore_rpc,isolate,[Pid,false]) || {bkdcore_rpc,Pid,worker,[bkdcore_rpc]} <- L]
 				rpc:call(Nd,bkdcore_rpc,isolate,[false])
-		end
+		end,
+		NodeInfo = butil:findobj(distname,Nd,butil:ds_val(nodes,etscfg)),
+		[rpc:call(butil:ds_val(distname,Nd1), bkdcore_rpc, isolate_from,[butil:tobin(butil:ds_val(name,NodeInfo)),false]) || Nd1 <- butil:ds_val(nodes,etscfg)]
 	end || Nd <- Nodes];
 isolate_end(N) ->
 	isolate_end([N]).
