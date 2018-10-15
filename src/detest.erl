@@ -19,7 +19,7 @@ ip(Distname) ->
 	IP.
 
 % Isolate node or nodes on Id
-% All nodes with this Id will see each other. 
+% All nodes with this Id will see each other.
 isolate(Nodes,Id) when is_list(Nodes) ->
 	[begin
 		rpc:call(Nd,erlang,set_cookie,[Nd,butil:toatom(Id)]),
@@ -41,7 +41,7 @@ isolate(Node,Id) ->
 
 % Back to default
 isolate_end(Nodes) when is_list(Nodes) ->
-	[begin 
+	[begin
 		rpc:call(Nd,erlang,set_cookie,[Nd,erlang:get_cookie()]),
 		erlang:set_cookie(Nd,erlang:get_cookie()),
 		pong = net_adm:ping(Nd),
@@ -117,6 +117,7 @@ add_node(P1,NewCfg) ->
 stop_node([_|_] = Nd) ->
 	stop_node(distname(Nd));
 stop_node(Nm) when is_atom(Nm) ->
+	io:format("stopnode ~p~n",[Nm]),
 	Nm ! stop,
 	wait_pids([whereis(Nm)]).
 
@@ -536,7 +537,7 @@ runerl(Port,OsPid) ->
 			end,
 			runerl(Port,OsPid);
 		stop when is_integer(OsPid) ->
-			os:cmd("kill "++integer_to_list(OsPid));
+			os:cmd("kill -KILL "++integer_to_list(OsPid));
 		stop ->
 			ok
 	end.
@@ -563,7 +564,7 @@ connect([H|T],Start,Timeout) ->
 		_ ->
 			?INF("Connecting to ~p",[ndnm(H)]),
 			Node = butil:ds_val(distname,H),
-			case net_kernel:hidden_connect(Node) of
+			case net_kernel:hidden_connect_node(Node) of
 				true ->
 					case net_adm:ping(Node) of
 		        		pang ->
