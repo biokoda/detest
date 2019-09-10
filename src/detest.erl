@@ -158,7 +158,6 @@ main(Param) ->
 			?INF("Unable to compile: ~p",[Err]),
 			halt(1)
 	end,
-	detest_net:start(),
 	run(Mod,ScriptArg,ScriptLoad).
 
 stop(Reason) ->
@@ -286,7 +285,7 @@ run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 	end,
 
 	os:cmd("chmod -R a+rw "++butil:ds_val(basepath,etscfg)),
-
+	detest_net:start(),
 	% spawn nodes
 	RunPids = [start_node(Nd,Cfg) || Nd <- Nodes],
 	butil:ds_add(runpids,RunPids,etscfg),

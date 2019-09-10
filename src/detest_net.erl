@@ -3,7 +3,7 @@
 -export([start/0]).
 
 -define(INTERVAL, 50).
--define(SAMPLES_PER_SEC, 1000 / ?INTERVAL).
+-define(SAMPLES_PER_SEC, (1000 / ?INTERVAL)).
 -define(PKT_SIZE,1500).
 
 start() ->
@@ -12,23 +12,25 @@ start() ->
 -record(nd,{rpc_port, dist_port, offset = 0}).
 -record(sock,{other, bw = 1024 * 1024, latency = 0, queue}).
 -record(lsock,{accept_ref, src_node, dst_port}).
--record(dp,{sockets = #{}, nodes = #{}}).
+-record(dp,{sockets = #{}, nodes = #{}, bytes = 0}).
 
 run() ->
 	erlang:send_after(?INTERVAL, self(), timeout),
 	Nodes = nodes_split(butil:ds_val(nodes,etscfg)),
 	run(#dp{nodes = Nodes,
-		sockets = create_listeners(Nodes,Nodes,#{})}).
+		sockets = create_listeners(maps:to_list(Nodes),maps:to_list(Nodes),#{})}).
 run(P) ->
 	receive
 		timeout ->
+			% ?INF("Transfered ~p ~p",[P#dp.sockets, P#dp.bytes]),
 			erlang:send_after(?INTERVAL, self(), timeout),
 			socket_activate(maps:to_list(P#dp.sockets)),
 			run(P);
 		{tcp,Socket,Bin} ->
+			% ?INF("packet ~p",[byte_size(Bin)]),
 			#sock{other = Other} = maps:get(Socket, P#dp.sockets),
 			gen_tcp:send(Other, Bin),
-			run(P);
+			run(P#dp{bytes = P#dp.bytes + byte_size(Bin)});
 		{tcp_closed,Socket} ->
 			case maps:get(Socket, P#dp.sockets,undefined) of
 				undefined ->
@@ -40,14 +42,18 @@ run(P) ->
 		{tcp_passive,_S} ->
 			run(P);
 		{inet_async, LSock, _Ref, {ok, Sock}} ->
+			% ?INF("inet_async ~p",[LSock]),
 			run(accept(P,LSock, Sock));
 		{inet_async, LSock, _Ref, Error} ->
 			?INF("async accept error ~p",[Error]),
-			run(accept(P,LSock, undefined))
+			run(accept(P,LSock, undefined));
+		Other ->
+			?INF("detest_net unknown_msg ~p",[Other]),
+			run(P)
 	end.
 
 socket_activate([{S,#sock{bw = Bw}}|T]) ->
-	NPackets = erlang:round(Bw / ?PKT_SIZE / ?SAMPLES_PER_SEC),
+	NPackets = erlang:round(Bw / (?PKT_SIZE) / (?SAMPLES_PER_SEC)),
 	inet:setopts(S,[{active,NPackets}]),
 	socket_activate(T);
 socket_activate([_|T]) ->
@@ -59,12 +65,12 @@ create_listeners([{NdName,Nd}|T],Nodes,M) ->
 	create_listeners(T,Nodes,create_listeners(NdName, Nd, Nodes, M));
 create_listeners([],_,M) ->
 	M.
-create_listeners(NdName,Nd,[{OtherNd,Other}|T], M) when NdName /= OtherNd ->
+create_listeners(NdName,Nd,[{_OtherNd,Other}|T], M) -> % when NdName /= OtherNd
 	L1 = lsock(NdName, Other#nd.rpc_port + Nd#nd.offset, Other#nd.rpc_port),
 	L2 = lsock(NdName, Other#nd.dist_port + Nd#nd.offset, Other#nd.dist_port),
 	create_listeners(NdName, Nd, T, put_all([L1,L2],M));
-create_listeners(A,B,[_|T],M) ->
-	create_listeners(A,B,T,M);
+% create_listeners(A,B,[_|T],M) ->
+% 	create_listeners(A,B,T,M);
 create_listeners(_,_,[],M) ->
 	M.
 
@@ -82,6 +88,7 @@ accept(P, LSock, Sock) ->
 				ok ->
 					gen_tcp:controlling_process(Sock, self());
 				{error, _Reason} ->
+					?INF("async accept fail ~p",[_Reason]),
 					ok
 			end;
 		false ->
@@ -91,13 +98,20 @@ accept(P, LSock, Sock) ->
 		{ok, NewRef} ->
 			ok;
 		{error, NewRef} ->
+			?INF("async accept error"),
 			ok
 	end,
 	LInfo = maps:get(LSock, P#dp.sockets),
-	{ok,Other} = gen_tcp:connect({127,0,0,1},LInfo#lsock.dst_port,[{keepalive,true},binary,{active,false},{nodelay,true},{sndbuf,1024*4},{recbuf,1024*4}]),
-	Updates = [{LSock,LInfo#lsock{accept_ref = NewRef}},
-		{Other, #sock{other = Sock}},
-		{Sock, #sock{other = Other}}],
+	Opts = [{keepalive,true},binary,{active,false},{nodelay,true},{sndbuf,1024*4},{recbuf,1024*4}],
+	case gen_tcp:connect({127,0,0,1},LInfo#lsock.dst_port,Opts) of
+		{ok,Other} ->
+			Updates = [{LSock,LInfo#lsock{accept_ref = NewRef}},
+				{Other, #sock{other = Sock}},
+				{Sock, #sock{other = Other}}];
+		_ ->
+			gen_tcp:close(Sock),
+			Updates = [{LSock,LInfo#lsock{accept_ref = NewRef}}]
+	end,
 	P#dp{sockets = put_all(Updates, P#dp.sockets)}.
 
 put_all([{K,H}|T],M) ->
@@ -119,6 +133,7 @@ set_sockopt(LSocket, Socket) ->
     end.
 
 nodes_split(Nodes) ->
+	% ?INF("Nodes ~p",[Nodes]),
     maps:from_list([begin
         {butil:toatom(butil:ds_val(name,Nd)), 
 		#nd{rpc_port = butil:ds_val(rpcport,Nd,0),
