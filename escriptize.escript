@@ -20,7 +20,7 @@ main(BinFiles1) ->
   case zip:create("mem", Files, [memory]) of
     {ok, {"mem", ZipBin}} ->
       %% Archive was successfully created. Prefix that with header and write to "edis" file
-      Script = <<"#!/usr/bin/env escript\n%%! +Bc +K true  -smp enable\n", ZipBin/binary>>,
+      Script = <<"#!/usr/bin/env escript\n%%! +Bc +K true -start_epmd false -epmd_module detest_pmd -smp enable\n", ZipBin/binary>>,
       case file:write_file("detest", Script) of
         ok -> ok;
         {error, WriteError} ->

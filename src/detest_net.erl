@@ -1,272 +1,127 @@
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% NOT USED. abandoned idea to use tun/tap.
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 -module(detest_net).
-% script api
--export([toggle_online/2, set_delay/2, find_free_ip/0]).
-% internal call
--export([start/1]).
+-include("detest.hrl").
+-export([start/0]).
 
-toggle_online(Nm,Bool) when Bool == true; Bool == false ->
-	case butil:ds_val(Nm,cfg) of
-		undefined ->
-			false;
-		Pid ->
-			Pid ! {toggle,Bool}
-	end.
+-define(INTERVAL, 50).
+-define(SAMPLES_PER_SEC, 1000 / ?INTERVAL).
+-define(PKT_SIZE,1500).
 
-set_delay(Nm,{N1,0}) when N1 > 0 ->
-	set_delay(Nm,{N1,1});
-set_delay(Nm,Delay) ->
-	case butil:ds_val(Nm,cfg) of
-		undefined ->
-			false;
-		Pid ->
-			Pid ! {set_delay,Delay}
-	end.
+start() ->
+	spawn(fun() -> run() end).
 
-find_free_ip() ->
-	{ok,IFL} = inet:getif(),
-	ExistingIps = [IP || {IP,_,_} <- IFL],
-	ip_for_detest({192,168,100,1},ExistingIps).
+-record(nd,{rpc_port, dist_port, offset = 0}).
+-record(sock,{other, bw = 1024 * 1024, latency = 0, queue}).
+-record(lsock,{accept_ref, src_node, dst_port}).
+-record(dp,{sockets = #{}, nodes = #{}}).
 
-ip_for_detest({192,168,C,D},L) when C < 255, D == 255 ->
-	ip_for_detest({192,168,C+1,1},L);
-ip_for_detest({192,168,C,D} = IP,L) when C < 255, D < 255 ->
-	case lists:member(IP,L) of
-		true ->
-			ip_for_detest({192,168,C,D+1},L);
-		false ->
-			{192,168,C,D}
-	end.
-
-tuple_to_atom({A,B,C,D}) ->
-	list_to_atom("detest@"++integer_to_list(A)++"."++integer_to_list(B)++"."++
-	integer_to_list(C)++"."++integer_to_list(D)).
-
-start(L) ->
-	% First checks if necessary. It only runs if all IPs in L do not exist yet.
-	{ok,IFL} = inet:getif(),
-	ExistingIps = [IP || {IP,_,_} <- IFL],
-	JustLIps = [IP || {IP,_Delay,_Nm} <- L],
-	case JustLIps -- ExistingIps of
-		JustLIps ->
-			setup_ext(),
-
-			DetestIP = ip_for_detest({192,168,100,1},ExistingIps++JustLIps),
-			DetestName = tuple_to_atom(DetestIP),
-
-			Home = self(),
-			% Every IP has his own process
-			{Pids,_} = lists:foldl(fun({IP,Delay,Nm},{Pids,N}) -> 
-				{[{spawn(fun() -> route(IP,Nm,N,Home,Delay) end),IP,N}|Pids], N+1} end, 
-			{[],0}, [{DetestIP,{1000,0}, DetestName}|L]),
-			
-			case wait_ack(Pids) of
-				ok ->
-					spawn(fun() -> Pids1 = [begin erlang:monitor(process,P),P end || {P,_,_} <- Pids], cleanup(Pids1) end),
-					% Return list of pids and also inform every pid of where everyone else is
-					Out = [begin
-						Pid ! {peerlist, Pids},
-						Pid
-					end || {Pid,_,_} <- Pids],
-					{ok,Out,DetestName};
-				{error,Faults} ->
-					{error,[IP || {_,IP,_} <- Faults]}
-			end;
-		_ ->
-			[]
-	end.
-
--record(dev,{name, dev, ip, index, peers = [], delay = {0,0},
-	online = true, 
-	in_buf = [], in_reversed = [], in_unreversed = [],
-	out_buf = [], out_reversed = [], out_unreversed = []}).
-route(IP,Name,Index,Home,Delay1) ->
-	case ok of
-		_ when element(1,Delay1) > 0, element(2,Delay1) == 0 ->
-			Delay = {element(1,Delay1),1};
-		_ when is_integer(Delay1) ->
-			Delay = {Delay1,1};
-		_ ->
-			Delay = Delay1
-	end,
-	Home ! {done,Index},
-	case Delay of
-		{0,0} ->
-			ok;
-		_ ->
-			erlang:send_after(10,self(),timeout)
-	end,
-	butil:ds_add(Name,self(),cfg),
-	R = create_device(IP,Index),
-	route1(false,R#dev{delay = {element(1,Delay)*1000,element(2,Delay)*1000}, name = Name}).
-
-
-% If delay is set, packets from both directions are buffered in lists.
-% Keep track of time with timer. Join frames into 10ms buffers.
-% Theoretically 10ms at least. Erlang timers are not that exact so it may be skewed.
-% Unpredictable delay is fine. Networks are unpredictable anyway.
-route1(Time,#dev{in_reversed = []} = R) when R#dev.in_unreversed /= [] ->
-	route1(Time,R#dev{in_reversed = lists:reverse(R#dev.in_unreversed), in_unreversed = []});
-route1(Time,#dev{out_reversed = []} = R) when R#dev.out_unreversed /= [] ->
-	route1(Time,R#dev{out_reversed = lists:reverse(R#dev.out_unreversed), out_unreversed = []});
-route1({_,_,_} = Now, R) ->
-	case R of
-		#dev{in_reversed = [{Time,L}|_]} ->
-			Diff = timer:now_diff(Now,Time),
-			case Diff >= (element(1,R#dev.delay) + random:uniform(element(2,R#dev.delay))) of
-				true ->
-					% lager:info("Sending! in rev ~p",[Diff]),
-					[tuncer:send(R#dev.dev,Bin) || Bin <- L],
-					Again = true,
-					InRev = tl(R#dev.in_reversed);
-				false ->
-					Again = false,
-					InRev = R#dev.in_reversed
-			end;
-		_ ->
-			Again = false,
-			InRev = R#dev.in_reversed
-	end,
-	case R of
-		#dev{out_reversed = [{Time2,L2}|_]} ->
-			Diff2 = timer:now_diff(Now,Time2),
-			case Diff2 >= (element(1,R#dev.delay) + random:uniform(element(2,R#dev.delay))) of
-				true ->
-					% lager:info("Sending! out rev ~p",[Diff2]),
-					[[P ! Data || P <- R#dev.peers] || Data <- L2],
-					Again1 = true,
-					OutRev = tl(R#dev.out_reversed);
-				false ->
-					Again1 = false,
-					OutRev = R#dev.out_reversed
-			end;
-		_ ->
-			Again1 = false,
-			OutRev = R#dev.out_reversed
-	end,
-	NR = R#dev{out_reversed = OutRev, in_reversed = InRev},
-	case Again orelse Again1 of
-		true ->
-			route1(os:timestamp(),NR);
-		false ->
-			route2(NR)
-	end;
-route1(_,R) ->
-	route2(R).
-route2(R) ->
+run() ->
+	erlang:send_after(?INTERVAL, self(), timeout),
+	Nodes = nodes_split(butil:ds_val(nodes,etscfg)),
+	run(#dp{nodes = Nodes,
+		sockets = create_listeners(Nodes,Nodes,#{})}).
+run(P) ->
 	receive
-		{tuntap, _Dev, Data} ->
-			% lager:info("Received tuntap ~p ~p~n",[R#dev.peers,pkt:decode(Data)]),
-			case R#dev.online of
-				true when R#dev.delay /= {0,0} ->
-					% lager:info("Buffering tuntap ~p",[length(R#dev.out_buf)]),
-					route1(false,R#dev{out_buf = [Data|R#dev.out_buf]});
-				% true when R#dev.delay /= {0,0} ->
-				% 	route1(false,R#dev{out_unreversed = [{os:timestamp(),Data}|R#dev.out_unreversed]});
-				true ->
-					% lager:info("No buffering out"),
-					[P ! Data || P <- R#dev.peers],
-					route2(R);
-				false ->
-					route2(R)
-			end;
-		<<_/binary>> = Bin ->
-			case R#dev.online of
-				true when R#dev.delay /= {0,0} ->
-					% lager:info("Buffering input ~p",[length(R#dev.in_buf)]),
-					route1(false,R#dev{in_buf = [Bin|R#dev.in_buf]});
-				% true when R#dev.delay /= {0,0} ->
-				% 	route1(false,R#dev{in_unreversed = [{os:timestamp(),Bin}|R#dev.in_unreversed]});
-				true ->
-					% lager:info("No buffering in"),
-					tuncer:send(R#dev.dev,Bin),
-					route2(R);
-				false ->
-					route2(R)
-			end;
 		timeout ->
-			Now = os:timestamp(),
-			erlang:send_after(10,self(),timeout),
-			case R#dev.in_buf of
-				[] ->
-					InUnrev = R#dev.in_unreversed;
-				_ ->
-					% lager:info("Timeout inbuf ~p",[length(R#dev.in_buf)]),
-					InUnrev = [{Now,lists:reverse(R#dev.in_buf)}|R#dev.in_unreversed]
-			end,
-			case R#dev.out_buf of
-				[] ->
-					OutUnrev = R#dev.out_unreversed;
-				_ ->
-					% lager:info("Timeout outbuf ~p",[length(R#dev.out_buf)]),
-					OutUnrev = [{Now,lists:reverse(R#dev.out_buf)}|R#dev.out_unreversed]
-			end,
-			route1(Now,R#dev{out_buf = [], in_buf = [], 
-						in_unreversed = InUnrev,
-						out_unreversed = OutUnrev});
-		{toggle,Bool} ->
-			route1(false,R#dev{online = Bool});
-		{set_delay,Delay} ->
-			case R#dev.delay of
-				{0,0} when Delay /= {0,0} ->
-					erlang:send_after(10,self(),timeout);
-				_ ->
+			erlang:send_after(?INTERVAL, self(), timeout),
+			socket_activate(maps:to_list(P#dp.sockets)),
+			run(P);
+		{tcp,Socket,Bin} ->
+			#sock{other = Other} = maps:get(Socket, P#dp.sockets),
+			gen_tcp:send(Other, Bin),
+			run(P);
+		{tcp_closed,Socket} ->
+			case maps:get(Socket, P#dp.sockets,undefined) of
+				undefined ->
+					run(P);
+				#sock{other = Other} ->
+					gen_tcp:close(Other),
+					run(P#dp{sockets = maps:remove(Other,maps:remove(Socket,P#dp.sockets))})
+			end;
+		{tcp_passive,_S} ->
+			run(P);
+		{inet_async, LSock, _Ref, {ok, Sock}} ->
+			run(accept(P,LSock, Sock));
+		{inet_async, LSock, _Ref, Error} ->
+			?INF("async accept error ~p",[Error]),
+			run(accept(P,LSock, undefined))
+	end.
+
+socket_activate([{S,#sock{bw = Bw}}|T]) ->
+	NPackets = erlang:round(Bw / ?PKT_SIZE / ?SAMPLES_PER_SEC),
+	inet:setopts(S,[{active,NPackets}]),
+	socket_activate(T);
+socket_activate([_|T]) ->
+	socket_activate(T);
+socket_activate([]) ->
+	ok.
+
+create_listeners([{NdName,Nd}|T],Nodes,M) ->
+	create_listeners(T,Nodes,create_listeners(NdName, Nd, Nodes, M));
+create_listeners([],_,M) ->
+	M.
+create_listeners(NdName,Nd,[{OtherNd,Other}|T], M) when NdName /= OtherNd ->
+	L1 = lsock(NdName, Other#nd.rpc_port + Nd#nd.offset, Other#nd.rpc_port),
+	L2 = lsock(NdName, Other#nd.dist_port + Nd#nd.offset, Other#nd.dist_port),
+	create_listeners(NdName, Nd, T, put_all([L1,L2],M));
+create_listeners(A,B,[_|T],M) ->
+	create_listeners(A,B,T,M);
+create_listeners(_,_,[],M) ->
+	M.
+
+lsock(Nd,Port,DstPort) ->
+	Opts = [binary, {packet, 0}, {reuseaddr, true},
+            {keepalive, true}, {active, false}],
+	{ok,LSock} = gen_tcp:listen(Port, Opts),
+	{ok, Ref} = prim_inet:async_accept(LSock, -1),
+	{LSock,#lsock{accept_ref = Ref, src_node = Nd, dst_port = DstPort}}.
+
+accept(P, LSock, Sock) ->
+	case is_port(Sock) of
+		true ->
+			case set_sockopt(LSock, Sock) of
+				ok ->
+					gen_tcp:controlling_process(Sock, self());
+				{error, _Reason} ->
 					ok
-			end,
-			route1(false,R#dev{delay = Delay});
-		{peerlist,L} ->
-			route1(false,R#dev{peers = [Pid || {Pid,_Ip,Index} <- L, Index /= R#dev.index]});
-		stop ->
+			end;
+		false ->
 			ok
-	end.
-
-
-wait_ack([]) ->
-	ok;
-wait_ack(Pids) ->
-	receive
-		{done,Index} ->
-			wait_ack(lists:keydelete(Index,3,Pids))
-	after 5000 ->
-		cleanup([]),
-		{error,Pids}
-	end.
-
-
-cleanup([]) ->
-	file:delete("procket"),
-	file:delete("procket.so");
-cleanup(Pids) ->
-	receive
-		{'DOWN',_Monitor,_,Pid,_Reason} ->
-			cleanup(lists:delete(Pid,Pids))
-	end.
-
-create_device(IP,N) ->
-	Nm = "tap"++integer_to_list(N),
-	{ok, Dev} = tuncer:create(Nm, [tap, no_pi, {active, true}]),
-	ok = tuncer:up(Dev, IP),
-	#dev{dev = Dev, ip = IP, index = N}.
-
-
-setup_ext() ->
-	case catch escript:script_name() of
-		[_|_] ->
-			{ok,Myself} = file:read_file(escript:script_name()),
-			[_,BinWithoutHead] = binary:split(Myself,<<80,75,3,4>>),
-			ZipBin = <<80,75,3,4,BinWithoutHead/binary>>;
-		_ ->
-			{ok,ZipBin} = file:read_file("detest.ez")
 	end,
-	case zip:extract(ZipBin,[memory]) of
-		{ok,ZipFiles} ->
-			[begin
-				file:write_file(Name,PrBin),
-				os:cmd("chmod +x "++Name)
-			end || {Name,PrBin} <- ZipFiles, Name == "procket" orelse Name == "procket.so"];
-		_ ->
+	case prim_inet:async_accept(LSock, -1) of
+		{ok, NewRef} ->
+			ok;
+		{error, NewRef} ->
 			ok
-	end.
+	end,
+	LInfo = maps:get(LSock, P#dp.sockets),
+	{ok,Other} = gen_tcp:connect({127,0,0,1},LInfo#lsock.dst_port,[{keepalive,true},binary,{active,false},{nodelay,true},{sndbuf,1024*4},{recbuf,1024*4}]),
+	Updates = [{LSock,LInfo#lsock{accept_ref = NewRef}},
+		{Other, #sock{other = Sock}},
+		{Sock, #sock{other = Other}}],
+	P#dp{sockets = put_all(Updates, P#dp.sockets)}.
+
+put_all([{K,H}|T],M) ->
+	put_all(T,maps:put(K,H,M));
+put_all([],M) ->
+	M.
+
+set_sockopt(LSocket, Socket) ->
+    {ok, Mod} = inet_db:lookup_socket(LSocket),
+    true = inet_db:register_socket(Socket, Mod),
+    case prim_inet:getopts(LSocket, [active, nodelay, keepalive, delay_send, priority, tos]) of
+        {ok, Opts} ->
+            case prim_inet:setopts(Socket, Opts) of
+                ok -> ok;
+                Error -> gen_tcp:close(Socket), Error
+            end;
+        Error ->
+            gen_tcp:close(Socket), Error
+    end.
+
+nodes_split(Nodes) ->
+    maps:from_list([begin
+        {butil:toatom(butil:ds_val(name,Nd)), 
+		#nd{rpc_port = butil:ds_val(rpcport,Nd,0),
+		dist_port = butil:ds_val(dist_port,Nd),
+		offset = butil:ds_val(connect_offset,Nd,0)}}
+    end || Nd <- Nodes]).

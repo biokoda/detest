@@ -4,15 +4,7 @@
 -export([main/1,run/1,run/2,run/3,ez/0]).
 % API for test module
 -export([add_node/1,add_node/2, stop_node/1, ip/1, cmd/2, isolate/2,isolate_end/1]).
--define(PATH,".detest").
--define(INF(F,Param),
-	case butil:ds_val(quiet,etscfg) of
-	true ->
-		ok;
-	_ ->
-		io:format("~p ~p: ~s~n",[time(),?MODULE,io_lib:fwrite(F,Param)])
-	end).
--define(INF(F),?INF(F,[])).
+-include("detest.hrl").
 
 ip(Distname) ->
 	[_,IP] = string:tokens(butil:tolist(Distname),"@"),
@@ -166,7 +158,7 @@ main(Param) ->
 			?INF("Unable to compile: ~p",[Err]),
 			halt(1)
 	end,
-
+	detest_net:start(),
 	run(Mod,ScriptArg,ScriptLoad).
 
 stop(Reason) ->
@@ -670,7 +662,7 @@ dtlnm(G) ->
 
 compile_cfgs(L) ->
 	[begin
-		case erlydtl:compile_file(dtlnm(Cfg), list_to_atom(filename:basename(dtlnm(Cfg))),[{out_dir,false},return]) of
+		case erlydtl:compile_file(dtlnm(Cfg), list_to_atom(filename:basename(dtlnm(Cfg))),[{out_dir,false},return,{auto_escape,false}]) of
 			ok ->
 				ok;
 			{ok,_} ->
