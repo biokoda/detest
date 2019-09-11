@@ -239,6 +239,7 @@ run(Mod,ScriptArg,{Mod,_ModBin,_ModFilename} = ScriptLoad) ->
 	butil:ds_add(scriptload,ScriptLoad,etscfg),
 	butil:ds_add(erlcmd,butil:ds_val(erlcmd,GlobCfgs,"erl"),etscfg),
 	butil:ds_add(erlenv,butil:ds_val(erlenv,GlobCfgs,[]),etscfg),
+	butil:ds_add(internode_bw,butil:ds_val(internode_bw,Cfg,1024*1024),etscfg),
 	butil:ds_add(connect_timeout,butil:ds_val(connect_timeout,Cfg,10000),etscfg),
 	butil:ds_add(app_wait_timeout,butil:ds_val(app_wait_timeout,Cfg,30000),etscfg),
 
@@ -368,10 +369,10 @@ script_param([]) ->
 	false.
 
 do_stop(Mod,Cfg,ScriptParam) ->
-	RunPids = butil:ds_val(runpids,etscfg),
+	RunPids = ?CFG(runpids),
 	{StopMod,StopFunc,StopArg} = butil:ds_val(stop,Cfg,{init,stop,[]}),
 	% Nodelist may have changed, read it from ets
-	Nodes = butil:ds_val(nodes,etscfg),
+	Nodes = ?CFG(nodes),
 	timer:sleep(800),
 	Pids = [spawn(fun() -> rpc:call(distname(Nd),StopMod,StopFunc,StopArg,10000) end) || Nd <- Nodes],
 	wait_pids(Pids),
@@ -389,7 +390,7 @@ start_node(Nd) ->
 start_node(Nd,GlobCfg) ->
 	start_node(Nd,butil:ds_val(cmd,GlobCfg,""),butil:ds_val(erlcmd,GlobCfg,"erl"),butil:ds_val(erlenv,GlobCfg,[])).
 start_node(Nd,GlobCmd,ErlCmd1,ErlEnv1) ->
-	AppPth = lists:flatten([butil:ds_val(basepath,etscfg),"/",ndnm(Nd),"/etc/app.config"]),
+	AppPth = lists:flatten([?CFG(basepath),"/",ndnm(Nd),"/etc/app.config"]),
 	RunCmd = butil:ds_val(cmd,Nd,GlobCmd),
 	ErlCmd = butil:ds_val(erlcmd,Nd,ErlCmd1),
 	ErlEnv = butil:ds_val(erlenv,Nd,ErlEnv1),

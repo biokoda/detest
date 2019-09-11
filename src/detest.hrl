@@ -7,3 +7,5 @@
 		io:format("~p ~p: ~s~n",[time(),?MODULE,io_lib:fwrite(F,Param)])
 	end).
 -define(INF(F),?INF(F,[])).
+
+-define(CFG(K),butil:ds_val(K,etscfg)).
