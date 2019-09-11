@@ -1,6 +1,6 @@
 -module(detest_net).
 -include("detest.hrl").
--export([start/0, node_bw/2, node_latency/2, node_online/2]).
+-export([start/0, add_node/1,node_bw/2, node_latency/2, node_online/2]).
 
 -define(INTERVAL, 3).
 -define(SAMPLES_PER_SEC, (1000 / ?INTERVAL)).
@@ -15,6 +15,8 @@ node_latency(Node,Latency) ->
 node_online(Node,Bool) ->
 	call({node_online, butil:toatom(Node), Bool}).
 
+add_node(Node) ->
+	call({add_node, butil:toatom(Node)}).
 
 tm() ->
 	erlang:monotonic_time(millisecond).
@@ -36,7 +38,7 @@ call(Msg) ->
 run() ->
 	register(?MODULE,self()),
 	erlang:send_after(?INTERVAL, self(), timeout),
-	Nodes = nodes_split(?CFG(nodes)),
+	Nodes = nodes_parse(),
 	run(#dp{nodes = Nodes,
 		sockets = create_listeners(maps:to_list(Nodes),maps:to_list(Nodes),#{})}).
 run(P) ->
@@ -83,6 +85,11 @@ run(P) ->
 			run(P)
 	end.
 
+modify(P,{add_node, Node}) ->
+	#{Node := NI} = nodes_parse(),
+	Nodes = maps:put(Node, NI, P#dp.nodes),
+	P#dp{nodes = Nodes, 
+		sockets = create_listeners([{Node,NI}],maps:to_list(Nodes),P#dp.sockets)};
 modify(P,{_What, Node, _Bw} = Op) ->
 	#{Node := #nd{online = NodeOnline} = NI} = P#dp.nodes,
 	case Op of
@@ -236,11 +243,15 @@ set_sockopt(LSocket, Socket) ->
             gen_tcp:close(Socket), Error
     end.
 
-nodes_split(Nodes) ->
+nodes_parse() ->
+	Nodes = ?CFG(nodes),
 	% ?INF("Nodes ~p",[Nodes]),
     maps:from_list([begin
-        {butil:toatom(butil:ds_val(name,Nd)), 
-		#nd{rpc_port = butil:ds_val(rpcport,Nd,0),
-		dist_port = butil:ds_val(dist_port,Nd),
-		offset = butil:ds_val(connect_offset,Nd,0)}}
+        {butil:toatom(butil:ds_val(name,Nd)), readnd(Nd)}
     end || Nd <- Nodes]).
+
+readnd(Nd) ->
+	#nd{rpc_port = butil:ds_val(rpcport,Nd,0),
+		dist_port = butil:ds_val(dist_port,Nd),
+		offset = butil:ds_val(connect_offset,Nd,0)}.
+

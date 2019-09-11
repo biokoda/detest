@@ -90,7 +90,8 @@ add_node(P1,NewCfg) ->
 	case butil:findobj(distname,DistName,butil:ds_val(nodes,etscfg)) of
 		false ->
 			Nodes = [P|butil:ds_val(nodes,etscfg)],
-			butil:ds_add(nodes,Nodes,etscfg);
+			butil:ds_add(nodes,Nodes,etscfg),
+			detest_net:add_node(butil:ds_val(name,P));
 		_ ->
 			butil:ds_val(nodes,etscfg)
 	end,
