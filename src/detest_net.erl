@@ -1,6 +1,6 @@
 -module(detest_net).
 -include("detest.hrl").
--export([start/0, add_node/1,node_bw/2, node_latency/2, node_online/2]).
+-export([start/0, add_node/1,node_bw/2, node_latency/2, node_online/2, isolation_group_remove/1, isolation_group_set/2]).
 
 -define(INTERVAL, 3).
 -define(SAMPLES_PER_SEC, (1000 / ?INTERVAL)).
@@ -14,6 +14,10 @@ node_latency(Node,Latency) ->
 	call({node_latency, butil:toatom(Node), Latency}).
 node_online(Node,Bool) ->
 	call({node_online, butil:toatom(Node), Bool}).
+isolation_group_set(Nodes,Id) ->
+	call({group_set, [butil:toatom(Node) || Node <- Nodes], Id}).
+isolation_group_remove(Id) ->
+	call({group_remove, Id}).
 
 add_node(Node) ->
 	call({add_node, butil:toatom(Node)}).
@@ -30,9 +34,9 @@ call(Msg) ->
 	end.
 
 -record(pkt,{bin = <<>>, tm = 0}).
--record(nd,{rpc_port, dist_port, offset = 0, online = true}).
--record(sock,{other, src_node, dst_node, bw = 1024 * 1024, recv_int_bytes = 0, int_budget = 1024, latency = 0, queue}).
--record(lsock,{accept_ref, src_node, dst_node, dst_port, port, blocked = false}).
+-record(nd,{rpc_port, dist_port, offset = 0, online = true, groups = []}).
+-record(sock,{src_node, dst_node, other, bw = 1024 * 1024, recv_int_bytes = 0, int_budget = 1024, latency = 0, queue}).
+-record(lsock,{src_node, dst_node, accept_ref, dst_port, port, blocked = false}).
 -record(dp,{sockets = #{}, nodes = #{}, bytes = 0}).
 
 run() ->
@@ -85,6 +89,30 @@ run(P) ->
 			run(P)
 	end.
 
+modify(P,{group_set, Nodes, Id}) ->
+	ModNodes = [{NdNm,NI#nd{groups = butil:lists_add(Id, NI#nd.groups)}} || 
+		{NdNm,NI} <- maps:to_list(P#dp.nodes), lists:member(NdNm,Nodes) andalso lists:member(Id,NI#nd.groups) == false],
+	case ModNodes of
+		[] ->
+			P;
+		_ ->
+			NP = P#dp{nodes = put_all(ModNodes,P#dp.nodes)},
+			Op = {group_set, Nodes},
+			NP#dp{sockets = mod_socks(NP#dp.nodes, maps:to_list(NP#dp.sockets), Op, NP#dp.sockets)}
+	end;
+modify(P,{group_remove, Id}) ->
+	ModNodes = [{NdNm,NI#nd{groups = lists:delete(Id, NI#nd.groups)}} || 
+		{NdNm,NI} <- maps:to_list(P#dp.nodes), lists:member(Id,NI#nd.groups)],
+	case ModNodes of
+		[] ->
+			P;
+		_ ->
+			Op = {group_remove, Id},
+			NSocks = mod_socks(P#dp.nodes, maps:to_list(P#dp.sockets), Op, P#dp.sockets),
+			UpdatedNodes = put_all(ModNodes,P#dp.nodes),
+			P#dp{nodes = UpdatedNodes,
+				sockets = create_listeners(ModNodes,maps:to_list(UpdatedNodes),NSocks)}
+	end;
 modify(P,{add_node, Node}) ->
 	#{Node := NI} = nodes_parse(),
 	Nodes = maps:put(Node, NI, P#dp.nodes),
@@ -108,6 +136,59 @@ modify(P,{_What, Node, _Bw} = Op) ->
 			end
 	end.
 
+src_node(#sock{src_node = Src}) ->
+	Src;
+src_node(#lsock{src_node = Src}) ->
+	Src.
+dst_node(#sock{dst_node = Dst}) ->
+	Dst;
+dst_node(#lsock{dst_node = Dst}) ->
+	Dst.
+
+mod_socks(Nodes,[{S,SI}|T], {group_remove, GrpId} = Op, M) ->
+	SrcNd = src_node(SI),
+	DstNd = dst_node(SI),
+	SrcNI = maps:get(SrcNd, Nodes),
+	DstNI = maps:get(DstNd, Nodes),
+	MemberSrc = lists:member(GrpId, SrcNI#nd.groups),
+	MemberDst = lists:member(GrpId, DstNI#nd.groups),
+	case MemberSrc orelse MemberDst of
+		false ->
+			mod_socks(Nodes,T, Op, M);
+		true ->
+			MemberSrc1 = lists:delete(GrpId, SrcNI#nd.groups),
+			MemberDst1 = lists:delete(GrpId, DstNI#nd.groups),
+			NoCommon = (SrcNI#nd.groups -- DstNI#nd.groups) == SrcNI#nd.groups,
+			case ok of
+				_ when MemberSrc1 == [], MemberDst1 == [] ->
+					mod_socks(Nodes,T, Op, M);
+				_ when NoCommon ->
+					mod_socks(Nodes,T, Op, sock_close(S, SI, M));
+				_ ->
+					mod_socks(Nodes,T, Op, M)
+			end
+	end;
+mod_socks(Nodes,[{S,SI}|T], {group_set, GNodes} = Op, M) ->
+	SrcNd = src_node(SI),
+	DstNd = dst_node(SI),
+	MemberSrc = lists:member(SrcNd, GNodes),
+	MemberDst = lists:member(DstNd, GNodes),
+	case MemberSrc orelse MemberDst of
+		true when MemberSrc andalso MemberDst ->
+			mod_socks(Nodes,T, Op, M);
+		true ->
+			SrcNI = maps:get(SrcNd, Nodes),
+			DstNI = maps:get(DstNd, Nodes),
+			case (SrcNI#nd.groups -- DstNI#nd.groups) /= SrcNI#nd.groups of
+				% they have a common group
+				true -> 
+					mod_socks(Nodes,T, Op, M);
+				false ->
+					mod_socks(Nodes,T, Op, sock_close(S, SI, M))
+			end;
+		false ->
+			mod_socks(Nodes,T, Op, M)
+	end;
 mod_socks(Nodes,[{S,SI}|T], {node_bw, Node, Bw} = Op, M) when SI#sock.src_node == Node; SI#sock.dst_node == Node ->
 	mod_socks(Nodes,T, Op, M#{S => sock_bw(SI,Bw)});
 mod_socks(Nodes,[{S,SI}|T], {node_latency, Node, Lat} = Op, M) when SI#sock.src_node == Node; SI#sock.dst_node == Node ->
@@ -115,17 +196,14 @@ mod_socks(Nodes,[{S,SI}|T], {node_latency, Node, Lat} = Op, M) when SI#sock.src_
 mod_socks(Nodes,[{S,SI}|T], {node_online, Node, Bool} = Op, M) when SI#sock.src_node == Node; SI#sock.dst_node == Node ->
 	case Bool of
 		false ->
-			gen_tcp:close(S),
-			gen_tcp:close(SI#sock.other),
-			mod_socks(Nodes,T, Op, maps:delete(S,maps:delete(SI#sock.other,M)));
+			mod_socks(Nodes,T, Op, sock_close(S, SI, M));
 		true ->
 			mod_socks(Nodes,T, Op, M)
 	end;
 mod_socks(Nodes,[{S,SI}|T], {node_online, Node, Bool} = Op, M) when SI#lsock.src_node == Node; SI#lsock.dst_node == Node ->
 	case Bool of
 		false ->
-			gen_tcp:close(S),
-			mod_socks(Nodes,T, Op, maps:delete(S,M));
+			mod_socks(Nodes,T, Op, sock_close(S,SI,M));
 		true ->
 			mod_socks(Nodes,T, Op, M)
 	end;
@@ -134,6 +212,13 @@ mod_socks(Nodes,[_|T], Op, M) ->
 mod_socks(_,[],_, M) ->
 	M.
 
+sock_close(S, SI, M) when element(1,SI) == sock ->
+	gen_tcp:close(S),
+	gen_tcp:close(SI#sock.other),
+	maps:delete(S,maps:delete(SI#sock.other,M));
+sock_close(S, SI, M) when element(1,SI) == lsock ->
+	gen_tcp:close(S),
+	maps:delete(S,M).
 
 flush_q(Sock, #sock{other = Other} = SI) ->
 	case queue:out(SI#sock.queue) of
@@ -164,14 +249,31 @@ socket_activate([_|T], M) ->
 socket_activate([], M) ->
 	M.
 
+create_listeners([{_NdName,#nd{online = false}}|T],Nodes,M) ->
+	create_listeners(T,Nodes,M);
 create_listeners([{NdName,Nd}|T],Nodes,M) ->
 	create_listeners(T,Nodes,create_listeners(NdName, Nd, Nodes, M));
 create_listeners([],_,M) ->
 	M.
 create_listeners(NdName,Nd,[{OtherNd,Other}|T], M) -> % when NdName /= OtherNd
-	L1 = lsock(NdName, Other#nd.rpc_port + Nd#nd.offset, Other#nd.rpc_port, OtherNd),
-	L2 = lsock(NdName, Other#nd.dist_port + Nd#nd.offset, Other#nd.dist_port, OtherNd),
-	create_listeners(NdName, Nd, T, put_all([L1,L2],M));
+	Groups = Nd#nd.groups,
+	OtherGroups = Nd#nd.groups,
+	case ok of
+		_ when Groups == [], OtherGroups == [] ->
+			Doit = true;
+		_ ->
+			% If this this node and other node have a common group
+			Doit = (Groups -- OtherGroups) /= Groups
+	end,
+	case Doit of
+		true ->
+			L1 = lsock(NdName, Other#nd.rpc_port + Nd#nd.offset, Other#nd.rpc_port, OtherNd),
+			L2 = lsock(NdName, Other#nd.dist_port + Nd#nd.offset, Other#nd.dist_port, OtherNd),
+			Changes = [L1,L2];
+		false ->
+			Changes = []
+	end,
+	create_listeners(NdName, Nd, T, put_all(Changes,M));
 % create_listeners(A,B,[_|T],M) ->
 % 	create_listeners(A,B,T,M);
 create_listeners(_,_,[],M) ->
