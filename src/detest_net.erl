@@ -91,7 +91,7 @@ run(P) ->
 			% ?INF("inet_async ~p",[LSock]),
 			run(accept(P,LSock, Sock));
 		{inet_async, _LSock, _Ref, _Error} ->
-			?INF("async accept error ~p",[_Error]),
+			?INF("async accept error ignore ~p",[_Error]),
 			run(P);
 		Other ->
 			?INF("detest_net unknown_msg ~p",[Other]),
@@ -335,23 +335,27 @@ accept(P, LSock, Sock) ->
 			?INF("async accept error"),
 			ok
 	end,
-	LInfo = maps:get(LSock, P#dp.sockets),
-	Opts = [{keepalive,true},binary,{active,false},{nodelay,true},{sndbuf,1024*4},{recbuf,1024*4}],
-	case gen_tcp:connect({127,0,0,1},LInfo#lsock.dst_port,Opts) of
-		{ok,Other} ->
-			BW = ?CFG(internode_bw),
-			DF = sock_bw(#sock{queue = queue:new()}, BW),
-			?INF("Accepted sock from=~p to=~p",[LInfo#lsock.src_node, LInfo#lsock.dst_node]),
-			OI = DF#sock{other = Sock, dst_node = LInfo#lsock.src_node, src_node = LInfo#lsock.dst_node},
-			SI = DF#sock{other = Other,src_node = LInfo#lsock.src_node, dst_node = LInfo#lsock.dst_node},
-			Updates = [{LSock,LInfo#lsock{accept_ref = NewRef}},
-				{Other, OI},
-				{Sock, SI}];
-		_ ->
-			gen_tcp:close(Sock),
-			Updates = [{LSock,LInfo#lsock{accept_ref = NewRef}}]
-	end,
-	P#dp{sockets = put_all(Updates, P#dp.sockets)}.
+	case maps:get(LSock, P#dp.sockets, undefined) of
+		undefined ->
+			P;
+		LInfo ->
+			Opts = [{keepalive,true},binary,{active,false},{nodelay,true},{sndbuf,1024*4},{recbuf,1024*4}],
+			case gen_tcp:connect({127,0,0,1},LInfo#lsock.dst_port,Opts) of
+				{ok,Other} ->
+					BW = ?CFG(internode_bw),
+					DF = sock_bw(#sock{queue = queue:new()}, BW),
+					?INF("Accepted sock from=~p to=~p",[LInfo#lsock.src_node, LInfo#lsock.dst_node]),
+					OI = DF#sock{other = Sock, dst_node = LInfo#lsock.src_node, src_node = LInfo#lsock.dst_node},
+					SI = DF#sock{other = Other,src_node = LInfo#lsock.src_node, dst_node = LInfo#lsock.dst_node},
+					Updates = [{LSock,LInfo#lsock{accept_ref = NewRef}},
+						{Other, OI},
+						{Sock, SI}];
+				_ ->
+					gen_tcp:close(Sock),
+					Updates = [{LSock,LInfo#lsock{accept_ref = NewRef}}]
+			end,
+			P#dp{sockets = put_all(Updates, P#dp.sockets)}
+	end.
 
 sock_bw(SI,BW) ->
 	SI#sock{bw = BW, int_budget = erlang:round(BW / ?SAMPLES_PER_SEC)}.
@@ -363,16 +367,21 @@ put_all([],M) ->
 	M.
 
 set_sockopt(LSocket, Socket) ->
-    {ok, Mod} = inet_db:lookup_socket(LSocket),
-    true = inet_db:register_socket(Socket, Mod),
-    case prim_inet:getopts(LSocket, [active, nodelay, keepalive, delay_send, priority, tos]) of
-        {ok, Opts} ->
-            case prim_inet:setopts(Socket, Opts) of
-                ok -> ok;
-                Error -> gen_tcp:close(Socket), Error
-            end;
-        Error ->
-            gen_tcp:close(Socket), Error
+	case inet_db:lookup_socket(LSocket) of
+		{error,E} ->
+			gen_tcp:close(Socket),
+			{error,E};
+		{ok, Mod} ->
+    		true = inet_db:register_socket(Socket, Mod),
+    		case prim_inet:getopts(LSocket, [active, nodelay, keepalive, delay_send, priority, tos]) of
+        		{ok, Opts} ->
+            		case prim_inet:setopts(Socket, Opts) of
+                		ok -> ok;
+                		Error -> gen_tcp:close(Socket), Error
+            		end;
+        		Error ->
+            		gen_tcp:close(Socket), Error
+			end
     end.
 
 nodes_parse() ->
