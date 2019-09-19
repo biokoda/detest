@@ -85,7 +85,7 @@ add_node(P1,NewCfg) ->
 	butil:ds_add(global_cfg,GlobCfgs,etscfg),
 	butil:ds_add(per_node_cfg,NodeCfgs,etscfg),
 	% add node to nodes
-	P = [{distname, DistName}|P1],
+	P = butil:lists_add({distname, DistName},P1),
 	% node might already be in cfg
 	case butil:findobj(distname,DistName,butil:ds_val(nodes,etscfg)) of
 		false ->

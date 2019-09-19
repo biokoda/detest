@@ -1,26 +1,68 @@
 -module(detest_net).
 -include("detest.hrl").
--export([start/0, add_node/1,node_bw/2, node_latency/2, node_online/2, isolation_group_remove/1, isolation_group_set/2]).
-
+-export([start/0, add_node/1,node_bw/2, node_latency/2, 
+	node_online/2, isolation_group_remove/1, isolation_group_set/2]).
+-export([reg_caller/0, unreg_caller/0, majority_node/0,
+	shape_traffic_rand/0,shape_traffic_stop/0, shape_traffic_set/1, shape_traffic_get/0]).
+-export([call/1]).
 -define(INTERVAL, 3).
 -define(SAMPLES_PER_SEC, (1000 / ?INTERVAL)).
 
 start() ->
+	detest_shaper:run(),
 	spawn(fun() -> run() end).
 
 node_bw(Node,Bw) ->
 	call({node_bw, butil:toatom(Node), Bw}).
 node_latency(Node,Latency) ->
 	call({node_latency, butil:toatom(Node), Latency}).
-node_online(Node,Bool) ->
-	call({node_online, butil:toatom(Node), Bool}).
-isolation_group_set(Nodes,Id) ->
-	call({group_set, [butil:toatom(Node) || Node <- Nodes], Id}).
-isolation_group_remove(Id) ->
-	call({group_remove, Id}).
 
+% This disables any automatic shaping
+node_online(Node,Bool) ->
+	case Bool of
+		true ->
+			detest_shaper:call({isolation_group_remove,Node});
+		false ->
+			detest_shaper:call({isolation_group_set,Node})
+	end,
+	call({node_online, butil:toatom(Node), Bool}).
+% This disables any automatic shaping
+isolation_group_set(Nodes,Id) ->
+	detest_shaper:call({isolation_group_set,Id}),
+	call({group_set, [butil:toatom(Node) || Node <- Nodes], Id}).
+% This disables any automatic shaping
+isolation_group_remove(Id) ->
+	detest_shaper:call({isolation_group_remove,Id}),
+	call({group_remove, Id}).
+% Should not be called client side
 add_node(Node) ->
+	detest_shaper:cast({add_node,Node}),
 	call({add_node, butil:toatom(Node)}).
+
+% Registers self for executing requests
+reg_caller() ->
+	detest_shaper:call(reg_caller).
+% Must unreg whenever there is a delay in executing requests or complete stop from caller
+unreg_caller() ->
+	detest_shaper:call(unreg_caller).
+% Get a node that is safe to call and request must succeed.
+% If network in flux, will block.
+majority_node() ->
+	detest_shaper:call(majority_node).
+% Change network conditions every 1-20s.
+% Always keeps a majority of nodes online.
+% Randomly sets latency between 0 - 1s for online nodes
+% Can take node offline by shutting down, set very high latency or isolates network.
+shape_traffic_rand() ->
+	detest_shaper:call(shape_traffic_rand).
+shape_traffic_get() ->
+	detest_shaper:call(shape_traffic_get).
+shape_traffic_set(Mods) ->
+	detest_shaper:call({shape_traffic_set,Mods}).
+shape_traffic_stop() ->
+	detest_shaper:call(shape_traffic_stop).
+
+
 
 tm() ->
 	erlang:monotonic_time(millisecond).
@@ -388,7 +430,9 @@ nodes_parse() ->
 	Nodes = ?CFG(nodes),
 	% ?INF("Nodes ~p",[Nodes]),
     maps:from_list([begin
-        {butil:toatom(butil:ds_val(distname,Nd)), readnd(Nd)}
+		Node = butil:toatom(butil:ds_val(distname,Nd)),
+		detest_shaper:call({add_node,Node}),
+        {Node, readnd(Nd)}
     end || Nd <- Nodes]).
 
 readnd(Nd) ->
