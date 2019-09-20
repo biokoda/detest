@@ -47,6 +47,17 @@ shaper() ->
 	Run = wait_runner(),
     link(Run),
 	erlang:monitor(process,Run),
+    Me = self(),
+    spawn(fun() ->
+        erlang:monitor(process,Me),
+        receive
+            {'DOWN',_Ref,_,_Pid,normal} ->
+                ok;
+            {'DOWN',_Ref,_,_Pid,Reason} ->
+                ?INF("shaper died ~p",[Reason]),
+                ok
+        end
+    end),
 	shaper(#sp{runner = Run}).
 shaper(P) ->
 	receive
@@ -59,10 +70,10 @@ shaper(P) ->
                 true ->
                     shaper(transition(timer(P#sp{transition = true})));
                 false ->
-                    unwrap(reshape(P#sp{calls = [], reshape_timer = undefined}),P#sp.calls)
+                    shaper(unwrap(reshape(P#sp{calls = [], reshape_timer = undefined}),P#sp.calls))
             end;
-		{call, From, Msg} ->
-			shaper(shaper_call(P,From,Msg))
+		{call, From, Ref, Msg} ->
+			shaper(shaper_call(P,{From,Ref},Msg))
 	end.
 
 timer(P) ->
@@ -76,7 +87,7 @@ shaper_call(P, {Pid,Ref}, {shape_traffic_set,Mods}) ->
 shaper_call(P, {Pid,Ref}, {isolation_group_remove,Id}) ->
     butil:safesend(Pid,{Ref,ok}),
     P#sp{isolation_groups = lists:delete(Id,P#sp.isolation_groups)};
-shaper_call(P, {Pid,Ref}, {isolation_group_set,Id}) ->
+shaper_call(P, {Pid,Ref}, {isolation_group_set,_Nodes,Id}) ->
     Grps = butil:lists_add(Id, P#sp.isolation_groups),
     case P#sp.isolation_groups of
         [] ->
@@ -100,7 +111,7 @@ shaper_call(P,{Pid,Ref}, shape_traffic_stop) ->
             P#sp{reshape_timer = undefined, shaping = false, calls = [{{Pid,Ref}, shape_traffic_stop}|P#sp.calls]}
     end;
 shaper_call(P,{Pid,Ref}, shape_traffic_rand) ->
-    shaper_call(P#sp{shape_mod_fixed = []},{Pid,Ref}, shape_traffic_start);    
+    shaper_call(P#sp{shape_mod_fixed = []},{Pid,Ref}, shape_traffic_start);
 shaper_call(P,{Pid,Ref}, shape_traffic_start) ->
     butil:safesend(Pid,{Ref,ok}),
     case P#sp.shaping of
@@ -182,11 +193,27 @@ reshape(#sp{shaping = true} = P) ->
             ok
     end,
     node_set(maps:to_list(NewMods)),
-    ?INF("Network shape: ~p",[NewMods]),
-    P#sp{node_mods = NewMods};
+    {OnlineNodes,IsolatedNodes} = split_offline(tuple_to_list(P#sp.nodes), [], [], NewMods),
+    ?INF("Network shape: ~p, non-majority:~p",[NewMods,IsolatedNodes]),
+    P#sp{node_mods = NewMods, nodes = list_to_tuple(OnlineNodes), isolated_nodes = IsolatedNodes};
 reshape(P) ->
     node_cleanup(maps:to_list(P#sp.node_mods)),
     P#sp{node_mods = #{}}.
+
+split_offline([Node|T],Online,Offline,Mods) ->
+    case maps:get(Node,Mods,undefined) of
+        undefined ->
+            split_offline(T,[Node|Online],Offline,Mods);
+        Obj ->
+            case is_offline(Obj) of
+                true ->
+                    split_offline(T,Online,[Node|Offline],Mods);
+                false ->
+                    split_offline(T,[Node|Online],Offline,Mods)
+            end
+    end;
+split_offline([],Online,Offline,_) ->
+    {Online,Offline}.
 
 set_latencies([Node|T],Obj) ->
     ObjMods = maps:get(Node,Obj,[]),
@@ -216,6 +243,9 @@ set_offline(Max,[Node|T], Offlines, Obj) ->
     end;
 set_offline(_Max,[],_,Obj) ->
     Obj.
+
+is_offline(Mods) ->
+    lists:member(offline,Mods) orelse lists:member(stop,Mods) orelse lists:member({latency,20000},Mods).
 
 offline_type(_Node) ->
     case rand:uniform(3) of

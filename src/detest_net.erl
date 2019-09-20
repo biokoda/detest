@@ -27,9 +27,10 @@ node_online(Node,Bool) ->
 	end,
 	call({node_online, butil:toatom(Node), Bool}).
 % This disables any automatic shaping
-isolation_group_set(Nodes,Id) ->
-	detest_shaper:call({isolation_group_set,Id}),
-	call({group_set, [butil:toatom(Node) || Node <- Nodes], Id}).
+isolation_group_set(Nodes1,Id) ->
+	Nodes = [butil:toatom(Node) || Node <- Nodes1],
+	detest_shaper:call({isolation_group_set,Nodes,Id}),
+	call({group_set, Nodes, Id}).
 % This disables any automatic shaping
 isolation_group_remove(Id) ->
 	detest_shaper:call({isolation_group_remove,Id}),
@@ -431,7 +432,7 @@ nodes_parse() ->
 	% ?INF("Nodes ~p",[Nodes]),
     maps:from_list([begin
 		Node = butil:toatom(butil:ds_val(distname,Nd)),
-		detest_shaper:call({add_node,Node}),
+		detest_shaper:cast({add_node,Node}),
         {Node, readnd(Nd)}
     end || Nd <- Nodes]).
 
