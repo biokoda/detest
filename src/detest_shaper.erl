@@ -66,6 +66,7 @@ shaper(P) ->
 		{'DOWN',_Ref,_,Pid,_} ->
 			shaper(shaper_call(P,{Pid,undefined},unreg_caller));
         reshape ->
+            ?INF("Reshape timer"),
             case P#sp.shaping of
                 true ->
                     shaper(transition(timer(P#sp{transition = true})));
@@ -111,14 +112,15 @@ shaper_call(P,{Pid,Ref}, shape_traffic_stop) ->
             P#sp{reshape_timer = undefined, shaping = false, calls = [{{Pid,Ref}, shape_traffic_stop}|P#sp.calls]}
     end;
 shaper_call(P,{Pid,Ref}, shape_traffic_rand) ->
-    shaper_call(P#sp{shape_mod_fixed = []},{Pid,Ref}, shape_traffic_start);
+    shaper_call(P#sp{shape_mod_fixed = #{}},{Pid,Ref}, shape_traffic_start);
 shaper_call(P,{Pid,Ref}, shape_traffic_start) ->
     butil:safesend(Pid,{Ref,ok}),
     case P#sp.shaping of
         true ->
             P;
         false ->
-            timer(P#sp{shaping = true, transition = true})
+            ?INF("shape_traffic_start ~p ~p",[P#sp.callers, P#sp.paused_callers]),
+            transition(timer(P#sp{shaping = true, transition = true}))
     end;
 shaper_call(P,{Pid,Ref}, {add_node,Nd}) ->
 	butil:safesend(Pid,{Ref,ok}),
@@ -126,7 +128,7 @@ shaper_call(P,{Pid,Ref}, {add_node,Nd}) ->
 shaper_call(#sp{transition = true} = P,{Pid,Ref}, majority_node) ->
     case lists:keytake(Pid, 1, P#sp.callers) of
         {value,Caller,NewCallers} ->
-            transition(P#sp{callers = NewCallers, paused_callers = [Caller|P#sp.paused_callers], calls = {{Pid,Ref},majority_node}});
+            transition(P#sp{callers = NewCallers, paused_callers = [Caller|P#sp.paused_callers], calls = [{{Pid,Ref},majority_node}|P#sp.calls]});
         _ ->
             butil:safesend(Pid,{Ref,undefined}),
             P
@@ -141,9 +143,9 @@ shaper_call(P,{Pid,Ref}, majority_node) ->
             P
     end;
 shaper_call(#sp{transition = true} = P,{Pid,Ref}, reg_caller) ->
-	butil:safesend(Pid,{Ref,ok}),
 	case lists:keymember(Pid,1,P#sp.paused_callers) of
 		false ->
+            butil:safesend(Pid,{Ref,ok}),
 			MonRef = erlang:monitor(process,Pid),
 			P#sp{paused_callers = [{Pid,MonRef}|P#sp.paused_callers]};
 		true ->
@@ -170,6 +172,7 @@ shaper_call(P,{Pid,Ref}, unreg_caller) ->
 					P#sp{paused_callers = lists:keydelete(Pid,1,P#sp.paused_callers)}
 			end;
 		{_,MonRef} ->
+            ?INF("Unreg caller ~p",[Pid]),
 			erlang:demonitor(MonRef,[flush]),
 			transition(P#sp{callers = lists:keydelete(Pid,1,P#sp.callers)})
 	end.
@@ -224,7 +227,7 @@ set_latencies([],Obj) ->
     Obj.
 
 set_offline(Nodes,Obj) ->
-    set_offline(Nodes div 2, Nodes, [], Obj).
+    set_offline(length(Nodes) div 2, Nodes, [], Obj).
 set_offline(Max,_, Offlines, Obj) when Max == length(Offlines) ->
     Obj;
 set_offline(Max,[Node|T], Offlines, Obj) ->
@@ -262,7 +265,7 @@ offline_type(_Node) ->
 
 node_set([{Node,Mods}|T]) ->
     [detest_net:call({node_latency, Node, Lat}) || {latency,Lat} <- Mods],
-    [detest_node:call({node_online, Node, false}) || offline <- Mods],
+    [detest_net:call({node_online, Node, false}) || offline <- Mods],
     [detest:stop_node(Node) || stop <- Mods],
     node_set(T);
 node_set([]) ->
